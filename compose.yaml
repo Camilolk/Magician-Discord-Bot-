@@ -1,0 +1,14 @@
+services:
+  magician:
+    build: .
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      MAGICIAN_DB_PATH: /data/magician.db
+    volumes:
+      - magician_data:/data
+    init: true
+
+volumes:
+  magician_data:
