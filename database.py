@@ -1,7 +1,8 @@
 """SQLite catalog storage. Only metadata and authorized source links."""
+import os
 import aiosqlite
 
-DB_PATH = "magician.db"
+DB_PATH = os.getenv("MAGICIAN_DB_PATH", "magician.db")
 
 
 async def init_db():
