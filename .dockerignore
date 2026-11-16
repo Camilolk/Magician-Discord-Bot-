@@ -1,0 +1,12 @@
+.git
+.github
+.devcontainer
+.env
+.env.*
+!.env.example
+*.db
+*.db-*
+*.session
+*.session-journal
+__pycache__
+*.pyc
