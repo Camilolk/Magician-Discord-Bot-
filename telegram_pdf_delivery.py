@@ -65,11 +65,11 @@ async def download_approved_telegram_pdf(entry, directory):
         raise DeliveryError("El PDF supera el límite de 8 MB o está vacío.")
     destination = Path(directory) / filename
     try:
-        result = await asyncio.wait_for(
+        await asyncio.wait_for(
             client.download_file(document, file=str(destination), part_size_kb=512), timeout=120
         )
     except (Exception, asyncio.TimeoutError) as exc:
         raise DeliveryError("No se pudo descargar el PDF desde Telegram.") from exc
-    if not result or not destination.is_file() or not 0 < destination.stat().st_size <= MAX_BYTES:
-        raise DeliveryError("La descarga del PDF no se completó correctamente.")
+    if not destination.is_file() or destination.stat().st_size != document.size:
+        raise DeliveryError("La descarga del PDF no se completó correctamente (tamaño distinto al esperado).")
     return destination
