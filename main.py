@@ -403,9 +403,15 @@ class NovelDetailView(discord.ui.View):
     async def request_pdf(self, interaction, button):
         documents = [(message_id, title) for message_id, title, _ in self.group["items"]]
         approved = authorized_keys_for_documents(documents)
-        approved_by_name = {name: key for key, name in approved}
+        approved_entries = [(key, get_authorized_entry(key)) for key, _ in approved]
         items = sorted(documents, key=lambda item: document_sort_key(item[1]))
-        choices = [(message_id, title, approved_by_name.get(title)) for message_id, title in items]
+        choices = []
+        for message_id, title in items:
+            key = next((key for key, entry in approved_entries
+                        if entry["filename"] == title and
+                        (entry.get("source") != "telegram" or
+                         entry.get("telegram_message_id") == message_id)), None)
+            choices.append((message_id, title, key))
         if not choices:
             await interaction.response.send_message("📄 No hay PDF asociados a esta obra.", ephemeral=True)
             return
