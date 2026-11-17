@@ -106,7 +106,7 @@ def load_story_groups(path=PREVIEW_PATH):
             name = (doc.get("filename") or "").strip()
             if name:
                 # No Telegram deep links are synthesized for private channels.
-                items.append((None, name, None))
+                items.append((doc.get("message_id"), name, None))
         if items:
             groups.append({
                 "name": title,
