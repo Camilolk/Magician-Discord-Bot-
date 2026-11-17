@@ -91,6 +91,7 @@ def metadata(msg):
         **fields,
         "message_id": msg.id,
         "description_excerpt": body[:500],
+        "description_full": body[:12000],
         "related_works": related_works_from_text(body),
         "documents": [],
         "confidence": "contextual",
