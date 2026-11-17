@@ -20,13 +20,13 @@ def extract_synopsis(text):
         return ""
     lines = text.splitlines()
     metadata_heading = re.compile(
-        r"^[^\\w\\r\\n]{0,16}\\s*(?:t[ií]tulo|nombre|obra|autor(?:es)?|author|origen|estado|"
+        r"^[^\w\r\n]{0,16}\s*(?:t[ií]tulo|nombre|obra|autor(?:es)?|author|origen|estado|"
         r"cap[ií]tulos?|vol[uú]men(?:es)?|g[eé]nero(?:s)?|fansubs|ilustraciones|"
-        r"otras obras del autor|descarga|enlaces?)\\s*[:：]",
+        r"otras obras del autor|descarga|enlaces?)\s*[:：]",
         re.I,
     )
     label = re.compile(
-        r"^\\s*(?:📖|📜|📝|📚)?\\s*(?:sinopsis|resumen|descripci[oó]n)\\s*[:：-]\\s*(.*)$",
+        r"^\s*(?:📖|📜|📝|📚)?\s*(?:sinopsis|resumen|descripci[oó]n)\s*[:：-]\s*(.*)$",
         re.I,
     )
     # Explicitly labeled text takes priority, wherever it occurs.
@@ -61,7 +61,7 @@ def extract_synopsis(text):
         if value.startswith("#") or value.startswith(("http://", "https://", "@")):
             return ""
         introduction.append(value)
-    prose = "\\n".join(introduction).strip()
+    prose = "\n".join(introduction).strip()
     # Avoid treating short announcements, tags or a standalone heading as a synopsis.
     if len(prose) < 65 or len(prose.split()) < 12:
         return ""
