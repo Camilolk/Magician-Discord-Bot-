@@ -411,7 +411,7 @@ class NovelDetailView(discord.ui.View):
             if value:
                 embed.add_field(name=label, value=discord.utils.escape_markdown(str(value)[:900]), inline=False)
         cover = group.get("cover_url")
-        if isinstance(cover, str) and re.fullmatch(r"https://[^\\s<>]+\\.(?:png|jpe?g|webp)(?:\\?[^\\s<>]*)?", cover, re.I):
+        if isinstance(cover, str) and re.fullmatch(r"https://[^\s<>]+\.(?:png|jpe?g|webp)(?:\?[^\s<>]*)?", cover, re.I):
             embed.set_thumbnail(url=cover)
         synopsis = group.get("synopsis")
         if synopsis:
@@ -476,7 +476,7 @@ class NovelDetailView(discord.ui.View):
 
 
 class CatalogSearchModal(discord.ui.Modal, title="Buscar en el catálogo"):
-    query = discord.ui.TextInput(label="Título de la novela", placeholder="Ejemplo: Majo no Tabitabi", max_length=100)
+    query = discord.ui.TextInput(label="Título, autor o género", placeholder="Ejemplo: fantasía", max_length=100)
 
     def __init__(self, catalog_view):
         super().__init__()
@@ -484,7 +484,6 @@ class CatalogSearchModal(discord.ui.Modal, title="Buscar en el catálogo"):
 
     async def on_submit(self, interaction):
         view = self.catalog_view
-        needle = normalize(str(self.query.value))
         matches = readers.search(view.all_groups, str(self.query.value))
         if not matches:
             await interaction.response.send_message("🔎 No encontré novelas con ese título en las fichas analizadas.", ephemeral=True)
@@ -634,7 +633,7 @@ async def recomendar(ctx, *, preferencia=""):
         await ctx.send("🪄 No encontré novelas para recomendar con ese filtro. Prueba otro género.")
         return
     embed = discord.Embed(title="✨ Recomendaciones de Magician",
-                          description=note + "\\n\\n" + "\\n".join(
+                          description=note + "\n\n" + "\n".join(
                               f"**{i}. {discord.utils.escape_markdown(g['name'][:100])}** — "
                               f"{discord.utils.escape_markdown((g.get('genres') or 'Género sin especificar')[:110])}"
                               for i,g in enumerate(groups,1)),
@@ -649,7 +648,7 @@ async def misfavoritos(ctx):
     if not rows:
         await ctx.send("⭐ No tienes favoritos. Abre una ficha con m!catalogo y pulsa ⭐ Favorito.")
         return
-    await ctx.send("⭐ **Tus favoritos**\\n" + "\\n".join(
+    await ctx.send("⭐ **Tus favoritos**\n" + "\n".join(
         f"{i}. {discord.utils.escape_markdown(title[:150])}" for i,(_,title,_) in enumerate(rows,1)),
         allowed_mentions=discord.AllowedMentions.none())
 
@@ -660,7 +659,7 @@ async def historial(ctx):
     if not rows:
         await ctx.send("📖 Tu historial está vacío. Abre documentos desde m!catalogo.")
         return
-    await ctx.send("📖 **Tu historial**\\n" + "\\n".join(
+    await ctx.send("📖 **Tu historial**\n" + "\n".join(
         f"{i}. {discord.utils.escape_markdown(title[:150])}" for i,(_,title,_) in enumerate(rows,1)),
         allowed_mentions=discord.AllowedMentions.none())
 
@@ -751,7 +750,7 @@ async def entregar(ctx, *, clave=""):
 @bot.command(name="ayuda")
 async def ayuda(ctx):
     await ctx.send(
-        "🪄 **Magician 3.5**\n"
+        "🪄 **Magician 4.0**\n"
         "`m!ping` — Estado\n"
         "`m!buscar título` — Búsqueda aproximada\n"
         "`m!recientes` — Últimas novelas\n"
@@ -759,10 +758,10 @@ async def ayuda(ctx):
         "`m!catalogo` — Obras agrupadas con menú\n"
         "`m!novela título` — Volúmenes de una obra\n"
         "`m!estadisticas` — Resumen del catálogo\n"
-        "`m!explorar consulta` — Buscar título, autor o género\\n"
-        "`m!recomendar [género]` — Recomendaciones personalizadas\\n"
-        "`m!misfavoritos` — Biblioteca de favoritos\\n"
-        "`m!historial` — Obras consultadas\\n"
+        "`m!explorar consulta` — Buscar título, autor o género\n"
+        "`m!recomendar [género]` — Recomendaciones personalizadas\n"
+        "`m!misfavoritos` — Biblioteca de favoritos\n"
+        "`m!historial` — Obras consultadas\n"
         "`m!entregar clave` — Enviar PDF autorizado al canal\n"
         "`m!ayuda` — Comandos"
     )
