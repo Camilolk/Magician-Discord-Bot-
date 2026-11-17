@@ -68,6 +68,25 @@ def extract_synopsis(text):
     return prose[:1800]
 
 
+
+def document_sort_key(filename):
+    """Order chapters and volumes naturally, leaving unnumbered files last."""
+    stem = Path(filename).stem
+    volume = re.search(r"(?i)\b(?:vol(?:umen|ume)?|tomo)\s*[-_. ]*0*(\d{1,4})\b", stem)
+    chapter = re.search(r"(?i)\b(?:cap(?:[ií]tulo)?|chapter|ch)\s*[-_. #]*0*(\d{1,5})\b", stem)
+    range_match = re.search(r"(?<!\d)(\d{1,5})\s*[-–_]\s*(\d{1,5})(?!\d)", stem)
+    standalone = re.search(r"(?<!\d)(\d{1,5})(?!\d)", stem)
+    if volume:
+        return (0, int(volume.group(1)), 0, normalized(stem))
+    if chapter:
+        return (1, int(chapter.group(1)), 0, normalized(stem))
+    if range_match:
+        return (1, int(range_match.group(1)), int(range_match.group(2)), normalized(stem))
+    if standalone:
+        return (2, int(standalone.group(1)), 0, normalized(stem))
+    return (3, 0, 0, normalized(stem))
+
+
 def load_story_groups(path=PREVIEW_PATH):
     """Each Telegram metadata post stays separate; no unverified merging."""
     path = Path(path)
