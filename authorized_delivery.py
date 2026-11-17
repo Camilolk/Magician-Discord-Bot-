@@ -42,8 +42,12 @@ def get_authorized_pdf(key):
     return path
 
 
-def authorized_keys_for_filenames(filenames):
-    """Return only explicit allowlist keys matching the given document names."""
+def authorized_keys_for_documents(documents):
+    """Match approved entries to catalog PDFs by Telegram message ID when provided.
+
+    Filename-only matching is reserved for explicitly local files.
+    Telegram-backed entries require an exact message ID to avoid collisions.
+    """
     if not MANIFEST.is_file():
         return []
     try:
@@ -52,12 +56,23 @@ def authorized_keys_for_filenames(filenames):
         return []
     if not isinstance(entries, dict):
         return []
-    allowed = set(filenames)
-    return [(key, entry["filename"]) for key, entry in entries.items()
-            if isinstance(key, str) and isinstance(entry, dict)
-            and entry.get("redistribution_authorized") is True
-            and isinstance(entry.get("filename"), str)
-            and entry["filename"] in allowed]
+    choices = []
+    seen = set()
+    for message_id, filename in documents:
+        for key, entry in entries.items():
+            if not isinstance(key, str) or not isinstance(entry, dict):
+                continue
+            if entry.get("redistribution_authorized") is not True or entry.get("filename") != filename:
+                continue
+            if entry.get("source") == "telegram":
+                if not isinstance(message_id, int) or entry.get("telegram_message_id") != message_id:
+                    continue
+            elif entry.get("source", "local") != "local":
+                continue
+            if key not in seen:
+                choices.append((key, filename))
+                seen.add(key)
+    return choices
 
 
 def get_authorized_entry(key):
