@@ -66,7 +66,7 @@ async def download_approved_telegram_pdf(entry, directory):
     destination = Path(directory) / filename
     try:
         result = await asyncio.wait_for(
-            client.download_media(message, file=str(destination)), timeout=120
+            client.download_file(document, file=str(destination), part_size_kb=512), timeout=120
         )
     except (Exception, asyncio.TimeoutError) as exc:
         raise DeliveryError("No se pudo descargar el PDF desde Telegram.") from exc
