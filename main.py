@@ -12,7 +12,7 @@ from dotenv import load_dotenv
 from rapidfuzz import fuzz
 
 from database import DB_PATH, init_db
-from story_catalog import load_story_groups
+from story_catalog import load_story_groups, document_sort_key
 
 load_dotenv()
 logging.basicConfig(level=logging.INFO)
@@ -282,9 +282,9 @@ class NovelDetailView(discord.ui.View):
 
     @discord.ui.button(label="Ver documentos", emoji="📄", style=discord.ButtonStyle.primary)
     async def documents(self, interaction, button):
-        items = sorted(self.group["items"], key=lambda item: normalize(item[1]))
+        items = sorted(self.group["items"], key=lambda item: document_sort_key(item[1]))
         results = [(title, url) for _, title, url in items]
-        view = ResultsView(interaction.user.id, results, f'📄 {self.group["name"][:140]} · Provisional')
+        view = ResultsView(interaction.user.id, results, f'📄 {self.group["name"][:140]} · Orden de lectura provisional')
         await interaction.response.send_message(
             embed=view.embed(), view=view, ephemeral=True,
             allowed_mentions=discord.AllowedMentions.none(),
