@@ -18,6 +18,7 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("magician")
 PREFIX = "m!"
 PAGE_SIZE = 5
+MAX_RESULTS = 100
 
 
 def normalize(value):
@@ -33,7 +34,7 @@ async def find_titles(query="", limit=5000):
         ) as cursor:
             records = await cursor.fetchall()
     if not query.strip():
-        return records[:100]
+        return records[:MAX_RESULTS]
     needle = normalize(query)
     matches = []
     for title, url in records:
@@ -42,7 +43,33 @@ async def find_titles(query="", limit=5000):
         if needle in haystack or score >= 75:
             matches.append((score, title, url))
     matches.sort(key=lambda item: (-item[0], item[1].casefold()))
-    return [(title, url) for _, title, url in matches[:100]]
+    return [(title, url) for _, title, url in matches[:MAX_RESULTS]]
+
+
+class JumpModal(discord.ui.Modal, title="Ir a una página"):
+    page_number = discord.ui.TextInput(
+        label="Número de página", placeholder="Ejemplo: 7", max_length=5
+    )
+
+    def __init__(self, results_view):
+        super().__init__()
+        self.results_view = results_view
+
+    async def on_submit(self, interaction):
+        view = self.results_view
+        try:
+            target = int(str(self.page_number.value))
+        except ValueError:
+            await interaction.response.send_message("Escribe un número válido.", ephemeral=True)
+            return
+        if not 1 <= target <= view.total_pages:
+            await interaction.response.send_message(
+                f"Elige una página entre 1 y {view.total_pages}.", ephemeral=True
+            )
+            return
+        view.page = target - 1
+        view.refresh()
+        await interaction.response.edit_message(embed=view.embed(), view=view)
 
 
 class ResultsView(discord.ui.View):
@@ -52,48 +79,76 @@ class ResultsView(discord.ui.View):
         self.results = results
         self.heading = heading
         self.page = 0
+        self.message = None
         self.refresh()
+
+    @property
+    def total_pages(self):
+        return max(1, (len(self.results) + PAGE_SIZE - 1) // PAGE_SIZE)
 
     def refresh(self):
         self.previous.disabled = self.page == 0
-        self.next_page.disabled = (self.page + 1) * PAGE_SIZE >= len(self.results)
+        self.next_page.disabled = self.page >= self.total_pages - 1
+        self.jump.disabled = self.total_pages == 1
 
     def embed(self):
-        total_pages = (len(self.results) + PAGE_SIZE - 1) // PAGE_SIZE
-        embed = discord.Embed(title=self.heading, color=discord.Color.purple())
         start = self.page * PAGE_SIZE
-        lines = []
-        for i, (title, url) in enumerate(self.results[start:start + PAGE_SIZE], start + 1):
+        end = min(start + PAGE_SIZE, len(self.results))
+        embed = discord.Embed(
+            title=self.heading,
+            description="Explora el catálogo de novelas indexadas en Telegram.",
+            color=discord.Color.from_rgb(150, 90, 225),
+        )
+        for i, (title, url) in enumerate(self.results[start:end], start + 1):
             safe = discord.utils.escape_markdown(title)
-            lines.append(f"**{i}.** {safe}")
-            # Only show publicly accessible source links when recorded.
-            if url and url.startswith("https://t.me/"):
-                lines.append(f"   [Publicación original]({url})")
-        embed.description = "\n".join(lines) or "Sin resultados."
-        embed.set_footer(text=f"Página {self.page + 1}/{total_pages} • {len(self.results)} resultados")
+            # Avoid exposing private-channel URLs or untrusted schemes.
+            detail = "📄 Documento PDF · Disponible en el catálogo"
+            if url and re.fullmatch(r"https://t\\.me/[A-Za-z0-9_]+/\\d+", url):
+                detail = f"🔗 [Ver publicación original]({url})"
+            embed.add_field(
+                name=f"📖 {i:02d} · {safe[:210]}",
+                value=detail,
+                inline=False,
+            )
+        embed.set_footer(
+            text=f"Página {self.page + 1} de {self.total_pages}  •  "
+                 f"{len(self.results)} resultados  •  Magician Library"
+        )
         return embed
 
     async def interaction_check(self, interaction):
         if interaction.user.id != self.owner_id:
-            await interaction.response.send_message("Estos botones pertenecen a otra búsqueda. Usa m!buscar para crear la tuya.", ephemeral=True)
+            await interaction.response.send_message(
+                "Esta búsqueda pertenece a otra persona. Usa m!buscar para crear la tuya.",
+                ephemeral=True,
+            )
             return False
         return True
 
-    @discord.ui.button(label="Anterior", emoji="◀️", style=discord.ButtonStyle.secondary)
+    @discord.ui.button(label="Anterior", emoji="◀️", style=discord.ButtonStyle.secondary, row=0)
     async def previous(self, interaction, button):
         self.page = max(0, self.page - 1)
         self.refresh()
         await interaction.response.edit_message(embed=self.embed(), view=self)
 
-    @discord.ui.button(label="Siguiente", emoji="▶️", style=discord.ButtonStyle.primary)
+    @discord.ui.button(label="Ir a página", emoji="🔢", style=discord.ButtonStyle.secondary, row=0)
+    async def jump(self, interaction, button):
+        await interaction.response.send_modal(JumpModal(self))
+
+    @discord.ui.button(label="Siguiente", emoji="▶️", style=discord.ButtonStyle.primary, row=0)
     async def next_page(self, interaction, button):
-        self.page = min((len(self.results) - 1) // PAGE_SIZE, self.page + 1)
+        self.page = min(self.total_pages - 1, self.page + 1)
         self.refresh()
         await interaction.response.edit_message(embed=self.embed(), view=self)
 
     async def on_timeout(self):
-        self.previous.disabled = True
-        self.next_page.disabled = True
+        for child in self.children:
+            child.disabled = True
+        if self.message:
+            try:
+                await self.message.edit(view=self)
+            except discord.HTTPException:
+                pass
 
 
 class Magician(commands.Bot):
@@ -125,7 +180,7 @@ async def send_results(ctx, query, heading):
         await ctx.send("📚 No encontré coincidencias. Prueba con parte del título.")
         return
     view = ResultsView(ctx.author.id, results, heading)
-    await ctx.send(embed=view.embed(), view=view, allowed_mentions=discord.AllowedMentions.none())
+    view.message = await ctx.send(embed=view.embed(), view=view, allowed_mentions=discord.AllowedMentions.none())
 
 
 @bot.command(name="buscar")
@@ -146,6 +201,24 @@ async def biblioteca(ctx):
     await send_results(ctx, "", "🪄 Biblioteca Magician")
 
 
+@bot.command(name="estadisticas", aliases=["stats"])
+async def estadisticas(ctx):
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute("SELECT COUNT(*) FROM novels") as cursor:
+            count = (await cursor.fetchone())[0]
+        async with db.execute("SELECT COUNT(DISTINCT telegram_chat_id) FROM novels") as cursor:
+            channels = (await cursor.fetchone())[0]
+    embed = discord.Embed(
+        title="📊 Estadísticas de Magician",
+        description="Resumen del catálogo local de metadatos.",
+        color=discord.Color.purple(),
+    )
+    embed.add_field(name="📚 Documentos indexados", value=str(count))
+    embed.add_field(name="📡 Canales registrados", value=str(channels))
+    embed.set_footer(text="Actualizado tras ejecutar telegram_indexer.py")
+    await ctx.send(embed=embed)
+
+
 @bot.command(name="ayuda")
 async def ayuda(ctx):
     await ctx.send(
@@ -154,6 +227,7 @@ async def ayuda(ctx):
         "`m!buscar título` — Búsqueda aproximada\n"
         "`m!recientes` — Últimas novelas\n"
         "`m!biblioteca` — Catálogo paginado\n"
+        "`m!estadisticas` — Resumen del catálogo\\n"
         "`m!ayuda` — Comandos"
     )
 
