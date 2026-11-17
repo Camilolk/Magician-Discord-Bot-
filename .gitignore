@@ -246,3 +246,5 @@ story_candidate_comparison*.json
 telegram_document_comparison*.json
 story_assisted_review*.json
 story_evidence_report*.json
+authorized_pdfs/
+authorized_pdfs.json
