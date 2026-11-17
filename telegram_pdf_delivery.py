@@ -62,7 +62,7 @@ async def download_approved_telegram_pdf(entry, directory):
     if mime != "application/pdf" or actual_name != filename:
         raise DeliveryError("El documento de Telegram no coincide con el PDF autorizado.")
     if not 0 < document.size <= MAX_BYTES:
-        raise DeliveryError("El PDF supera el límite de 8 MB o está vacío.")
+        raise DeliveryError(f"El PDF está vacío o supera el límite configurado de {MAX_BYTES // (1024 * 1024)} MiB.")
     destination = Path(directory) / filename
     try:
         await asyncio.wait_for(
