@@ -367,8 +367,8 @@ class NovelDetailView(discord.ui.View):
 
     @discord.ui.button(label="Solicitar PDF", emoji="📥", style=discord.ButtonStyle.success)
     async def request_pdf(self, interaction, button):
-        filenames = [title for _, title, _ in self.group["items"]]
-        choices = authorized_keys_for_filenames(filenames)
+        documents = [(message_id, title) for message_id, title, _ in self.group["items"]]
+        choices = authorized_keys_for_documents(documents)
         if not choices:
             await interaction.response.send_message(
                 "📄 Esta obra aún no tiene archivos habilitados para entrega directa.",
