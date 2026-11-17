@@ -16,8 +16,8 @@ from telethon import TelegramClient
 
 CHANNEL_ID = -1001485195933
 FIELD_RE = re.compile(
-    r"(?im)^[^\w\n]{0,16}\s*(t[ií]tulo|nombre|obra|autor(?:es)?|author|origen|estado|"
-    r"ilustraciones|ilustrador|vol[uú]men(?:es)?|g[eé]nero(?:s)?|fansubs)\s*[:：]\s*(.+?)\s*$"
+    r"(?im)^[^\\w\\r\\n]{0,16}[^\\S\\r\\n]*(t[ií]tulo|nombre|obra|autor(?:es)?|author|origen|estado|"
+    r"ilustraciones|ilustrador|vol[uú]men(?:es)?|g[eé]nero(?:s)?|fansubs)[^\\S\\r\\n]*[:：][^\\S\\r\\n]*([^\\r\\n]*)$"
 )
 
 def fields_from_text(body):
@@ -33,7 +33,8 @@ def fields_from_text(body):
             key = "genres"
         elif key.startswith("vol"):
             key = "volumes"
-        result[key] = value
+        if value:
+            result[key] = value
     return result
 
 RANGE_RE = re.compile(r"^\s*(\d{1,5})\s*[-–_]\s*(\d{1,5})\s*$")
@@ -52,7 +53,11 @@ def metadata(msg):
     body = msg.message or ""
     fields = fields_from_text(body)
     if not fields.get("title"):
-        return None
+        # Preserve a metadata post with an explicitly empty title; do not
+        # accidentally attach its PDFs to the preceding work.
+        if not re.search(r"(?im)^[^\\w\\r\\n]{0,16}[^\\S\\r\\n]*(?:t[ií]tulo|nombre|obra)[^\\S\\r\\n]*[:：]", body):
+            return None
+        fields["title"] = ""
     return {
         **fields,
         "message_id": msg.id,
@@ -117,6 +122,24 @@ async def analyze(limit, inspect=False):
             last_context_index = index
         else:
             unassigned.append(doc)
+    # Recover only a missing title from consistently named, non-generic PDFs.
+    # Ambiguous or generic filenames remain blank for manual review.
+    for work in works:
+        if work["title"] or not work["documents"]:
+            continue
+        candidates = []
+        for doc in work["documents"]:
+            if doc["generic_name"]:
+                continue
+            stem = Path(doc["filename"]).stem
+            stem = re.sub(r"(?i)[^\\w\\r\\n]*(?:\\d{1,5}\\s*[-–_]\\s*\\d{1,5}|vol(?:umen|ume)?\\.?\\s*\\d+)\\s*$", "", stem).strip(" -_.")
+            if stem:
+                candidates.append(stem)
+        if candidates and len({re.sub(r"\\W+", "", c).casefold() for c in candidates}) == 1:
+            work["title"] = candidates[0]
+            work["title_source"] = "pdf_filename_inferred"
+        else:
+            work["title_source"] = "missing_needs_review"
     return {
         "scanned_messages": len(messages),
         "detected_works": len(works),
