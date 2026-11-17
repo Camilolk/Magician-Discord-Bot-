@@ -155,7 +155,7 @@ class ResultsView(discord.ui.View):
             safe = discord.utils.escape_markdown(clean_title(title))
             # Avoid exposing private-channel URLs or untrusted schemes.
             detail = "📄 Documento PDF · Disponible en el catálogo"
-            if url and re.fullmatch(r"https://t\\.me/[A-Za-z0-9_]+/\\d+", url):
+            if url and re.fullmatch(r"https://t\.me/[A-Za-z0-9_]{5,32}/\d+", url):
                 detail = f"🔗 [Ver publicación original]({url})"
             embed.add_field(
                 name=f"📖 {i:02d} · {safe[:210]}",
