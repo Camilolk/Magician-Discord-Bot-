@@ -54,13 +54,13 @@ async def find_titles(query="", limit=None):
 
 
 def volume_number(title):
-    match = re.search(r"(?:vol(?:umen|ume)?\\.?\\s*|tomo\\s*|[-–]\\s*)?(\\d{1,3})$", clean_title(title), re.I)
+    match = re.search(r"(?:vol(?:umen|ume)?\.?\s*|tomo\s*|[-–]\s*)?(\d{1,3})$", clean_title(title), re.I)
     return int(match.group(1)) if match else None
 
 
 def novel_group_key(title):
-    value = re.sub(r"^\\d{1,3}\\s*[-.·]\\s*", "", clean_title(title))
-    value = re.sub(r"(?:\\s*[-–:]?\\s*(?:vol(?:umen|ume)?\\.?|tomo)\\s*)?\\d{1,3}$", "", value, flags=re.I)
+    value = re.sub(r"^\d{1,3}\s*[-.·]\s*", "", clean_title(title))
+    value = re.sub(r"(?:\s*[-–:]?\s*(?:vol(?:umen|ume)?\.?|tomo)\s*)?\d{1,3}$", "", value, flags=re.I)
     return normalize(value)
 
 
