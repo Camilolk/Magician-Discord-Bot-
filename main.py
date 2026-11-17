@@ -414,10 +414,11 @@ async def ayuda(ctx):
         "`m!buscar título` — Búsqueda aproximada\n"
         "`m!recientes` — Últimas novelas\n"
         "`m!biblioteca` — Catálogo paginado\n"
-        "`m!estadisticas` — Resumen del catálogo\n"\n        "`m!catalogo` — Obras agrupadas con menú\n"
+        "`m!catalogo` — Obras agrupadas con menú\n"
+        "`m!novela título` — Volúmenes de una obra\n"
+        "`m!estadisticas` — Resumen del catálogo\n"
         "`m!ayuda` — Comandos"
     )
-
 
 async def main():
     token = os.getenv("DISCORD_TOKEN", "").strip()
