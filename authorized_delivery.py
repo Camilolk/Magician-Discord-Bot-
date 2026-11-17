@@ -11,7 +11,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent
 PDF_ROOT = ROOT / "authorized_pdfs"
 MANIFEST = ROOT / "authorized_pdfs.json"
-MAX_BYTES = max(1, int(os.getenv("MAGICIAN_MAX_PDF_MIB", "10"))) * 1024 * 1024
+MAX_BYTES = max(1, int(os.getenv("MAGICIAN_MAX_PDF_MIB", "20"))) * 1024 * 1024
 CHANNEL_GRANTS = ROOT / "authorized_channels.json"
 
 
