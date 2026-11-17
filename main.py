@@ -533,18 +533,15 @@ async def entregar(ctx, *, clave=""):
         await ctx.send(f"📄 {exc}")
         return
     try:
-        await ctx.author.send(
+        await ctx.send(
             content="📚 Aquí tienes el documento autorizado solicitado.",
             file=discord.File(path),
             allowed_mentions=discord.AllowedMentions.none(),
         )
     except discord.Forbidden:
-        await ctx.send("📩 No pude enviarte un mensaje privado. Habilita los MD del servidor.")
-        return
+        await ctx.send("⚠️ No tengo permisos para adjuntar archivos en este canal.")
     except discord.HTTPException:
         await ctx.send("⚠️ Discord no pudo entregar el archivo. Revisa el tamaño o inténtalo después.")
-        return
-    await ctx.send("📩 Te envié el PDF por mensaje privado.")
 
 
 @bot.command(name="ayuda")
@@ -558,7 +555,7 @@ async def ayuda(ctx):
         "`m!catalogo` — Obras agrupadas con menú\n"
         "`m!novela título` — Volúmenes de una obra\n"
         "`m!estadisticas` — Resumen del catálogo\n"
-        "`m!entregar clave` — Enviar PDF autorizado por MD\n"
+        "`m!entregar clave` — Enviar PDF autorizado al canal\n"
         "`m!ayuda` — Comandos"
     )
 
