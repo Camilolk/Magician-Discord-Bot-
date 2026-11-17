@@ -414,7 +414,7 @@ async def ayuda(ctx):
         "`m!buscar título` — Búsqueda aproximada\n"
         "`m!recientes` — Últimas novelas\n"
         "`m!biblioteca` — Catálogo paginado\n"
-        "`m!estadisticas` — Resumen del catálogo\\n"
+        "`m!estadisticas` — Resumen del catálogo\n"\n        "`m!catalogo` — Obras agrupadas con menú\n"
         "`m!ayuda` — Comandos"
     )
 
