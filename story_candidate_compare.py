@@ -15,7 +15,7 @@ def load(path):
 
 
 def volume(filename):
-    match = re.search(r"(?i)\\b(?:vol(?:umen|ume)?|tomo)\\s*[-_. ]*0*(\\d{1,3})\\b", filename)
+    match = re.search(r"(?i)\b(?:vol(?:umen|ume)?|tomo)\s*[-_. ]*0*(\d{1,3})\b", filename)
     return int(match.group(1)) if match else None
 
 
@@ -24,7 +24,7 @@ def chapter_range(doc):
     if existing and len(existing) == 2:
         return existing
     stem = Path(doc["filename"]).stem
-    matches = re.findall(r"(?<!\\d)(\\d{1,5})\\s*[-–_]\\s*(\\d{1,5})(?!\\d)", stem)
+    matches = re.findall(r"(?<!\d)(\d{1,5})\s*[-–_]\s*(\d{1,5})(?!\d)", stem)
     if not matches:
         return None
     a, b = map(int, matches[-1])
