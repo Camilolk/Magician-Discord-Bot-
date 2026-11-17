@@ -58,3 +58,20 @@ def authorized_keys_for_filenames(filenames):
             and entry.get("redistribution_authorized") is True
             and isinstance(entry.get("filename"), str)
             and entry["filename"] in allowed]
+
+
+def get_authorized_entry(key):
+    """Return a validated explicit permission entry for local or Telegram delivery."""
+    if not MANIFEST.is_file():
+        raise DeliveryError("Todavía no hay documentos autorizados configurados.")
+    try:
+        entries = json.loads(MANIFEST.read_text(encoding="utf-8")).get("documents", {})
+    except (OSError, ValueError, AttributeError) as exc:
+        raise DeliveryError("El manifiesto de documentos no es válido.") from exc
+    entry = entries.get(key) if isinstance(entries, dict) and isinstance(key, str) else None
+    if not isinstance(entry, dict) or entry.get("redistribution_authorized") is not True:
+        raise DeliveryError("Este documento no está habilitado para entrega.")
+    name = entry.get("filename")
+    if not isinstance(name, str) or Path(name).name != name or not name.lower().endswith(".pdf"):
+        raise DeliveryError("Nombre de archivo no permitido.")
+    return entry
