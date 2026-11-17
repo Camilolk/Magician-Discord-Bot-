@@ -16,8 +16,8 @@ from telethon import TelegramClient
 
 CHANNEL_ID = -1001485195933
 FIELD_RE = re.compile(
-    r"(?im)^[^\\w\\n]{0,16}\\s*(t[ií]tulo|nombre|obra|autor(?:es)?|author|origen|estado|"
-    r"ilustraciones|ilustrador|vol[uú]men(?:es)?|g[eé]nero(?:s)?|fansubs)\\s*[:：]\\s*(.+?)\\s*$"
+    r"(?im)^[^\w\n]{0,16}\s*(t[ií]tulo|nombre|obra|autor(?:es)?|author|origen|estado|"
+    r"ilustraciones|ilustrador|vol[uú]men(?:es)?|g[eé]nero(?:s)?|fansubs)\s*[:：]\s*(.+?)\s*$"
 )
 
 def fields_from_text(body):
@@ -91,7 +91,7 @@ async def analyze(limit, inspect=False):
         shown = 0
         for msg in messages:
             if not is_pdf(msg) and (msg.message or "").strip():
-                snippet = (msg.message or "").strip().replace("\\n", " ")[:220]
+                snippet = (msg.message or "").strip().replace("\n", " ")[:220]
                 print(f"  Mensaje {msg.id}: {snippet}")
                 shown += 1
                 if shown >= 8:
