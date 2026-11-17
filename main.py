@@ -14,7 +14,7 @@ from rapidfuzz import fuzz
 
 from database import DB_PATH, init_db
 from story_catalog import load_story_groups, document_sort_key
-from authorized_delivery import get_authorized_pdf, get_authorized_entry, authorized_keys_for_filenames, DeliveryError
+from authorized_delivery import get_authorized_pdf, get_authorized_entry, authorized_keys_for_documents, DeliveryError
 from telegram_pdf_delivery import download_approved_telegram_pdf
 
 load_dotenv()
