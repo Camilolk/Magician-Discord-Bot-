@@ -261,6 +261,15 @@ class NovelDetailView(discord.ui.View):
             value = group.get(key)
             if value:
                 embed.add_field(name=label, value=discord.utils.escape_markdown(str(value)[:900]), inline=False)
+        synopsis = group.get("synopsis")
+        if synopsis:
+            embed.add_field(
+                name="📜 Sinopsis",
+                value=discord.utils.escape_mentions(discord.utils.escape_markdown(synopsis[:1000])),
+                inline=False,
+            )
+        else:
+            embed.add_field(name="📜 Sinopsis", value="No disponible en la ficha analizada.", inline=False)
         embed.add_field(name="📄 PDF asociados", value=str(len(group["items"])), inline=True)
         embed.set_footer(text=f'Publicación de metadatos: {group.get("metadata_message_id") or "sin ID"} · Magician')
         return embed
