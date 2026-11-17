@@ -4,6 +4,7 @@ import logging
 import os
 import re
 import tempfile
+import time
 import unicodedata
 
 import aiosqlite
@@ -23,6 +24,7 @@ logger = logging.getLogger("magician")
 PREFIX = "m!"
 PAGE_SIZE = 5
 MAX_RESULTS = 500
+PDF_DELIVERY_SLOTS = asyncio.Semaphore(2)
 
 
 def clean_title(value):
@@ -276,19 +278,26 @@ class CatalogSelect(discord.ui.Select):
 
 
 async def send_approved_pdf(channel, key, content, on_upload=None):
-    """Upload one approved PDF, then clean up any Telegram download."""
-    entry = get_authorized_entry(key)
-    if entry.get("source") == "telegram":
-        with tempfile.TemporaryDirectory(prefix="magician_pdf_") as directory:
-            path = await download_approved_telegram_pdf(entry, directory)
+    """Limit simultaneous transfers, log timings, and always remove temporary PDFs."""
+    started = time.monotonic()
+    async with PDF_DELIVERY_SLOTS:
+        entry = get_authorized_entry(key)
+        if entry.get("source") == "telegram":
+            with tempfile.TemporaryDirectory(prefix="magician_pdf_") as directory:
+                path = await download_approved_telegram_pdf(entry, directory)
+                downloaded = time.monotonic()
+                logger.info("PDF %s: descarga Telegram %.1f s", key, downloaded - started)
+                if on_upload is not None:
+                    await on_upload()
+                await channel.send(content=content, file=discord.File(path),
+                                   allowed_mentions=discord.AllowedMentions.none())
+        else:
+            path = get_authorized_pdf(key)
             if on_upload is not None:
                 await on_upload()
             await channel.send(content=content, file=discord.File(path),
                                allowed_mentions=discord.AllowedMentions.none())
-    else:
-        path = get_authorized_pdf(key)
-        await channel.send(content=content, file=discord.File(path),
-                           allowed_mentions=discord.AllowedMentions.none())
+        logger.info("PDF %s: entrega total %.1f s", key, time.monotonic() - started)
 
 
 class AuthorizedPDFSelect(discord.ui.Select):
@@ -315,7 +324,7 @@ class AuthorizedPDFSelect(discord.ui.Select):
             )
             return
         await interaction.response.defer(ephemeral=True, thinking=True)
-        await interaction.followup.send("⏳ Preparando descarga desde Telegram…", ephemeral=True)
+        await interaction.edit_original_response(content="⏳ Preparando descarga desde Telegram…")
         async def report_upload():
             await interaction.edit_original_response(content="📤 Descarga completada. Subiendo PDF a Discord…")
         try:
