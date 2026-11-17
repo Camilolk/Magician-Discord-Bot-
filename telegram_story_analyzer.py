@@ -15,8 +15,27 @@ from dotenv import load_dotenv
 from telethon import TelegramClient
 
 CHANNEL_ID = -1001485195933
-TITLE_RE = re.compile(r"(?im)^\s*(?:📗|📘|📚|📖|🔰|▪️|•|[-*])?\s*(?:>\s*)?(?:t[ií]tulo|nombre|obra)\s*[:：]\s*(.+?)\s*$")
-AUTHOR_RE = re.compile(r"(?im)^\s*(?:📗|📘|📚|📖|🔰|▪️|•|[-*])?\s*(?:>\s*)?(?:autor(?:es)?|author)\s*[:：]\s*(.+?)\s*$")
+FIELD_RE = re.compile(
+    r"(?im)^[^\\w\\n]{0,16}\\s*(t[ií]tulo|nombre|obra|autor(?:es)?|author|origen|estado|"
+    r"ilustraciones|ilustrador|vol[uú]men(?:es)?|g[eé]nero(?:s)?|fansubs)\\s*[:：]\\s*(.+?)\\s*$"
+)
+
+def fields_from_text(body):
+    result = {}
+    for match in FIELD_RE.finditer(body):
+        key = match.group(1).casefold()
+        value = match.group(2).strip()
+        if key in ("título", "titulo", "nombre", "obra"):
+            key = "title"
+        elif key in ("autor", "autores", "author"):
+            key = "author"
+        elif key.startswith("g"):
+            key = "genres"
+        elif key.startswith("vol"):
+            key = "volumes"
+        result[key] = value
+    return result
+
 RANGE_RE = re.compile(r"^\s*(\d{1,5})\s*[-–_]\s*(\d{1,5})\s*$")
 GENERIC_RE = re.compile(r"^(?:\d{1,5}|vol(?:umen|ume)?\.?\s*\d+|tomo\s*\d+)$", re.I)
 
@@ -31,13 +50,11 @@ def is_pdf(msg):
 
 def metadata(msg):
     body = msg.message or ""
-    title = TITLE_RE.search(body)
-    if not title:
+    fields = fields_from_text(body)
+    if not fields.get("title"):
         return None
-    author = AUTHOR_RE.search(body)
     return {
-        "title": title.group(1).strip(),
-        "author": author.group(1).strip() if author else None,
+        **fields,
         "message_id": msg.id,
         "description_excerpt": body[:500],
         "documents": [],
