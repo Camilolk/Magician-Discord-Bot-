@@ -38,7 +38,7 @@ def fields_from_text(body):
     return result
 
 RELATED_WORKS_RE = re.compile(
-    r"(?im)^\\s*otras obras del autor\\s*[:：]\\s*(.*)$"
+    r"(?im)^\s*otras obras del autor\s*[:：]\s*(.*)$"
 )
 
 
@@ -55,7 +55,7 @@ def related_works_from_text(body):
         line = line.strip()
         if not line or line.startswith("#") or FIELD_RE.match(line):
             break
-        if re.match(r"(?i)^(?:otras obras|sinopsis|resumen|descarga|enlaces?)\\s*:", line):
+        if re.match(r"(?i)^(?:otras obras|sinopsis|resumen|descarga|enlaces?)\s*:", line):
             break
         lines.append(line)
         if len(lines) >= 5:
