@@ -12,6 +12,7 @@ from dotenv import load_dotenv
 from rapidfuzz import fuzz
 
 from database import DB_PATH, init_db
+from story_catalog import load_story_groups
 
 load_dotenv()
 logging.basicConfig(level=logging.INFO)
@@ -240,6 +241,8 @@ class CatalogSelect(discord.ui.Select):
         )
         results = [(title, url) for _, title, url in items]
         view = ResultsView(interaction.user.id, results, f'📖 {group["name"][:180]}')
+        if group.get("provisional"):
+            view.heading = f'📖 {group["name"][:150]} · Asociación provisional'
         await interaction.response.send_message(
             embed=view.embed(), view=view, ephemeral=True,
             allowed_mentions=discord.AllowedMentions.none(),
@@ -278,8 +281,8 @@ class CatalogView(discord.ui.View):
             for i, group in enumerate(groups)
         ]
         embed = discord.Embed(
-            title="📚 Magician 3.0 · Catálogo de obras",
-            description="Selecciona una obra en el menú para ver sus documentos.\n\n" + "\n".join(lines),
+            title="📚 Magician 3.1 · Catálogo de obras",
+            description="Obras identificadas por publicaciones de Telegram. Las asociaciones de PDF son provisionales.\n\n" + "\n".join(lines),
             color=discord.Color.from_rgb(150, 90, 225),
         )
         embed.set_footer(text=f'Página {self.page + 1}/{self.total_pages} · {len(self.groups)} obras · Magician Library')
@@ -367,10 +370,13 @@ async def biblioteca(ctx):
 
 @bot.command(name="catalogo")
 async def catalogo(ctx):
-    records = await find_titles("")
-    groups = catalog_groups(records)
+    try:
+        groups = load_story_groups()
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        logger.warning("No se pudo cargar story_preview.json: %s", exc)
+        groups = []
     if not groups:
-        await ctx.send("📚 El catálogo está vacío. Ejecuta primero telegram_indexer.py.")
+        await ctx.send("📚 No hay fichas de novelas disponibles. Genera story_preview.json con telegram_story_analyzer.py. Mientras tanto puedes usar m!buscar.")
         return
     view = CatalogView(ctx.author.id, groups)
     view.message = await ctx.send(embed=view.embed(), view=view, allowed_mentions=discord.AllowedMentions.none())
