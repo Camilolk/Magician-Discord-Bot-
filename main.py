@@ -1,19 +1,580 @@
-"""Magician: Discord novel catalog bot."""
+"""Magician Discord library: fuzzy search and interactive pagination."""
 import asyncio
 import logging
 import os
+import re
+import tempfile
+import time
+import unicodedata
 
+import aiosqlite
 import discord
 from discord.ext import commands
 from dotenv import load_dotenv
+from rapidfuzz import fuzz
 
-from database import init_db, search_novels, recent_novels
+from database import DB_PATH, init_db
+import reader_features as readers
+from story_catalog import load_story_groups, document_sort_key
+from authorized_delivery import get_authorized_pdf, get_authorized_entry, authorized_keys_for_documents, DeliveryError, MAX_BYTES
+from telegram_pdf_delivery import download_approved_telegram_pdf
 
 load_dotenv()
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("magician")
-
 PREFIX = "m!"
+PAGE_SIZE = 5
+MAX_RESULTS = 500
+PDF_DELIVERY_SLOTS = asyncio.Semaphore(2)
+
+
+def clean_title(value):
+    value = re.sub(r"(?i)\.pdf$", "", value.strip())
+    value = value.replace("_", " ")
+    return re.sub(r"\s+", " ", value).strip(" -") or "Documento sin título"
+
+
+def normalize(value):
+    value = unicodedata.normalize("NFKD", value.casefold())
+    value = "".join(c for c in value if not unicodedata.combining(c))
+    return re.sub(r"[^\w]+", " ", value).strip()
+
+
+
+def title_parts(title):
+    value = clean_title(title)
+    match = re.match(r"^0*(\d{1,3})\s*(?:[-.·]\s*|\s+)(.+)$", value)
+    if match:
+        return match.group(2).strip(), int(match.group(1))
+    match = re.search(r"\s+(?:vol(?:umen|ume)?\.?|tomo)\s*0*(\d{1,3})$", value, re.I)
+    if match:
+        return value[:match.start()].strip(" -"), int(match.group(1))
+    match = re.search(r"\s+[-–]\s*0*(\d{1,3})$", value)
+    if match:
+        return value[:match.start()].strip(), int(match.group(1))
+    return value, None
+
+
+def rank_title(query, title):
+    needle = normalize(query)
+    base, _ = title_parts(title)
+    name = normalize(base)
+    if needle == name:
+        return 1000
+    if name.startswith(needle):
+        return 900
+    if needle in name:
+        return 800
+    words = needle.split()
+    if words and all(word in name.split() for word in words):
+        return 700
+    score = fuzz.ratio(needle, name)
+    return score if score >= 85 else -1
+
+
+async def find_titles(query="", limit=None):
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute("SELECT title, source_url FROM novels ORDER BY id DESC") as cursor:
+            records = await cursor.fetchall()
+    if not query.strip():
+        return records[:limit] if limit is not None else records
+    matches = []
+    for index, (title, url) in enumerate(records):
+        score = rank_title(query, title)
+        if score >= 0:
+            matches.append((score, index, title, url))
+    matches.sort(key=lambda item: (-item[0], item[1]))
+    cap = MAX_RESULTS if limit is None else limit
+    return [(title, url) for _, _, title, url in matches[:cap]]
+
+
+async def find_novel_volumes(query):
+    records = await find_titles("")
+    needle = normalize(query)
+    families = {}
+    for title, url in records:
+        base, volume = title_parts(title)
+        key = normalize(base)
+        if key and volume is not None and (needle == key or key.startswith(needle) or needle in key):
+            families.setdefault(key, []).append((volume, title, url))
+    if not families:
+        return []
+    family = max(families, key=lambda key: (key == needle, key.startswith(needle), fuzz.ratio(needle, key)))
+    matches = sorted(families[family], key=lambda row: (row[0], normalize(row[1])))
+    return [(title, url) for _, title, url in matches]
+
+
+class JumpModal(discord.ui.Modal, title="Ir a una página"):
+    page_number = discord.ui.TextInput(
+        label="Número de página", placeholder="Ejemplo: 7", max_length=5
+    )
+
+    def __init__(self, results_view):
+        super().__init__()
+        self.results_view = results_view
+
+    async def on_submit(self, interaction):
+        view = self.results_view
+        try:
+            target = int(str(self.page_number.value))
+        except ValueError:
+            await interaction.response.send_message("Escribe un número válido.", ephemeral=True)
+            return
+        if not 1 <= target <= view.total_pages:
+            await interaction.response.send_message(
+                f"Elige una página entre 1 y {view.total_pages}.", ephemeral=True
+            )
+            return
+        view.page = target - 1
+        view.refresh()
+        await interaction.response.edit_message(embed=view.embed(), view=view)
+
+
+class ResultsView(discord.ui.View):
+    def __init__(self, owner_id, results, heading):
+        super().__init__(timeout=180)
+        self.owner_id = owner_id
+        self.results = results
+        self.heading = heading
+        self.page = 0
+        self.message = None
+        self.refresh()
+
+    @property
+    def total_pages(self):
+        return max(1, (len(self.results) + PAGE_SIZE - 1) // PAGE_SIZE)
+
+    def refresh(self):
+        self.previous.disabled = self.page == 0
+        self.next_page.disabled = self.page >= self.total_pages - 1
+        self.jump.disabled = self.total_pages == 1
+
+    def embed(self):
+        start = self.page * PAGE_SIZE
+        end = min(start + PAGE_SIZE, len(self.results))
+        embed = discord.Embed(
+            title=self.heading,
+            description="Explora el catálogo de novelas indexadas en Telegram.",
+            color=discord.Color.from_rgb(150, 90, 225),
+        )
+        for i, (title, url) in enumerate(self.results[start:end], start + 1):
+            safe = discord.utils.escape_markdown(clean_title(title))
+            # Avoid exposing private-channel URLs or untrusted schemes.
+            detail = "📄 Documento PDF · Disponible en el catálogo"
+            if url and re.fullmatch(r"https://t\.me/[A-Za-z0-9_]{5,32}/\d+", url):
+                detail = f"🔗 [Ver publicación original]({url})"
+            embed.add_field(
+                name=f"📖 {i:02d} · {safe[:210]}",
+                value=detail,
+                inline=False,
+            )
+        embed.set_footer(
+            text=f"Página {self.page + 1} de {self.total_pages}  •  "
+                 f"{len(self.results)} resultados  •  Magician Library"
+        )
+        return embed
+
+    async def interaction_check(self, interaction):
+        if interaction.user.id != self.owner_id:
+            await interaction.response.send_message(
+                "Esta búsqueda pertenece a otra persona. Usa m!buscar para crear la tuya.",
+                ephemeral=True,
+            )
+            return False
+        return True
+
+    @discord.ui.button(label="Anterior", emoji="◀️", style=discord.ButtonStyle.secondary, row=0)
+    async def previous(self, interaction, button):
+        self.page = max(0, self.page - 1)
+        self.refresh()
+        await interaction.response.edit_message(embed=self.embed(), view=self)
+
+    @discord.ui.button(label="Ir a página", emoji="🔢", style=discord.ButtonStyle.secondary, row=0)
+    async def jump(self, interaction, button):
+        await interaction.response.send_modal(JumpModal(self))
+
+    @discord.ui.button(label="Siguiente", emoji="▶️", style=discord.ButtonStyle.primary, row=0)
+    async def next_page(self, interaction, button):
+        self.page = min(self.total_pages - 1, self.page + 1)
+        self.refresh()
+        await interaction.response.edit_message(embed=self.embed(), view=self)
+
+    async def on_timeout(self):
+        for child in self.children:
+            child.disabled = True
+        if self.message:
+            try:
+                await self.message.edit(view=self)
+            except discord.HTTPException:
+                pass
+
+
+
+def catalog_groups(records):
+    """Group document metadata by normalized work name, retaining every file."""
+    groups = {}
+    for title, url in records:
+        base, volume = title_parts(title)
+        key = normalize(base)
+        if not key:
+            continue
+        group = groups.setdefault(key, {"name": base, "items": []})
+        group["items"].append((volume, title, url))
+    return sorted(groups.values(), key=lambda group: normalize(group["name"]))
+
+
+async def attach_public_document_links(groups):
+    """Use only URLs saved by the indexer for this exact Telegram message ID.
+
+    No t.me/c private-channel links are constructed. Source links are not
+    evidence that provisional novel-to-document associations are correct.
+    """
+    ids = {message_id for group in groups for message_id, _, _ in group["items"]
+           if isinstance(message_id, int)}
+    if not ids:
+        return groups
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute(
+            "SELECT telegram_message_id, source_url FROM novels WHERE source_url IS NOT NULL"
+        ) as cursor:
+            rows = await cursor.fetchall()
+    public_links = {}
+    for message_id, url in rows:
+        if message_id in ids and isinstance(url, str) and re.fullmatch(
+            rf"https://t\.me/[A-Za-z0-9_]{{5,32}}/{message_id}", url
+        ):
+            public_links[message_id] = url
+    for group in groups:
+        group["items"] = [
+            (message_id, title, public_links.get(message_id))
+            for message_id, title, _ in group["items"]
+        ]
+    return groups
+
+
+class CatalogSelect(discord.ui.Select):
+    def __init__(self, catalog_view):
+        self.catalog_view = catalog_view
+        start = catalog_view.page * 10
+        choices = catalog_view.groups[start:start + 10]
+        options = [
+            discord.SelectOption(
+                label=group["name"][:100],
+                value=str(start + i),
+                description=f'{len(group["items"])} documento(s)'[:100],
+                emoji="📖",
+            )
+            for i, group in enumerate(choices)
+        ]
+        super().__init__(placeholder="📚 Selecciona una novela", options=options, row=0)
+
+    async def callback(self, interaction):
+        group = self.catalog_view.groups[int(self.values[0])]
+        view = NovelDetailView(interaction.user.id, group)
+        await interaction.response.send_message(
+            embed=view.embed(), view=view, ephemeral=True,
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
+        view.message = await interaction.original_response()
+
+
+async def send_approved_pdf(channel, key, content, on_upload=None):
+    """Upload authorized PDFs with bounded concurrency and measured timings."""
+    started = time.monotonic()
+    async with PDF_DELIVERY_SLOTS:
+        entry = get_authorized_entry(key)
+        guild = getattr(channel, "guild", None)
+        upload_limit = getattr(guild, "filesize_limit", None)
+        if isinstance(upload_limit, int) and upload_limit > 0:
+            if entry.get("source") != "telegram":
+                local_path = get_authorized_pdf(key)
+                if local_path.stat().st_size > upload_limit:
+                    raise DeliveryError(
+                        f"Este servidor de Discord admite adjuntos de hasta {upload_limit / (1024 * 1024):.1f} MiB."
+                    )
+        if entry.get("source") == "telegram":
+            with tempfile.TemporaryDirectory(prefix="magician_pdf_") as directory:
+                path = await download_approved_telegram_pdf(entry, directory)
+                downloaded = time.monotonic()
+                logger.info("PDF %s: descarga Telegram %.1f s", key, downloaded - started)
+                if isinstance(upload_limit, int) and upload_limit > 0 and path.stat().st_size > upload_limit:
+                    raise DeliveryError(
+                        f"PDF descargado ({path.stat().st_size / (1024 * 1024):.1f} MiB), "
+                        f"pero este servidor de Discord admite hasta {upload_limit / (1024 * 1024):.1f} MiB."
+                    )
+                if on_upload is not None:
+                    await on_upload()
+                await channel.send(content=content, file=discord.File(path),
+                                   allowed_mentions=discord.AllowedMentions.none())
+        else:
+            path = get_authorized_pdf(key)
+            if on_upload is not None:
+                await on_upload()
+            await channel.send(content=content, file=discord.File(path),
+                               allowed_mentions=discord.AllowedMentions.none())
+        logger.info("PDF %s: entrega total %.1f s", key, time.monotonic() - started)
+
+
+class AuthorizedPDFSelect(discord.ui.Select):
+    def __init__(self, parent):
+        self.parent_view = parent
+        start = parent.page * 25
+        subset = parent.documents[start:start + 25]
+        options = [
+            discord.SelectOption(
+                label=name[:100], value=str(start + i),
+                description="Disponible para entrega" if key else "Solo en catálogo · entrega no habilitada",
+                emoji="📥" if key else "📄",
+            )
+            for i, (_, name, key) in enumerate(subset)
+        ]
+        super().__init__(placeholder="📚 Selecciona un volumen", options=options, row=0)
+
+    async def callback(self, interaction):
+        message_id, name, key = self.parent_view.documents[int(self.values[0])]
+        if not key:
+            await interaction.response.send_message(
+                "📄 Este PDF figura en el catálogo, pero su entrega directa aún no está habilitada.",
+                ephemeral=True,
+            )
+            return
+        await interaction.response.defer(ephemeral=True, thinking=True)
+        await interaction.edit_original_response(content="⏳ Preparando descarga desde Telegram…")
+        async def report_upload():
+            await interaction.edit_original_response(content="📤 Descarga completada. Subiendo PDF a Discord…")
+        try:
+            await send_approved_pdf(
+                interaction.channel, key,
+                f"📚 Documento solicitado por {interaction.user.mention}: {discord.utils.escape_markdown(name)}",
+                on_upload=report_upload,
+            )
+        except DeliveryError as exc:
+            await interaction.edit_original_response(content=f"📄 {exc}")
+            return
+        except (discord.Forbidden, discord.HTTPException):
+            await interaction.edit_original_response(content="⚠️ No pude adjuntar el PDF en este canal.")
+            return
+        await interaction.edit_original_response(content="✅ PDF enviado a este canal.")
+
+
+class AuthorizedPDFView(discord.ui.View):
+    def __init__(self, owner_id, documents):
+        super().__init__(timeout=180)
+        self.owner_id = owner_id
+        self.documents = documents
+        self.page = 0
+        self.refresh()
+
+    def refresh(self):
+        self.clear_items()
+        self.add_item(AuthorizedPDFSelect(self))
+        self.previous.disabled = self.page == 0
+        self.next_page.disabled = (self.page + 1) * 25 >= len(self.documents)
+        self.add_item(self.previous)
+        self.add_item(self.next_page)
+
+    @discord.ui.button(label="Anterior", emoji="◀️", style=discord.ButtonStyle.secondary, row=1)
+    async def previous(self, interaction, button):
+        self.page = max(0, self.page - 1)
+        self.refresh()
+        await interaction.response.edit_message(view=self)
+
+    @discord.ui.button(label="Siguiente", emoji="▶️", style=discord.ButtonStyle.secondary, row=1)
+    async def next_page(self, interaction, button):
+        self.page = min((len(self.documents) - 1) // 25, self.page + 1)
+        self.refresh()
+        await interaction.response.edit_message(view=self)
+
+    async def interaction_check(self, interaction):
+        if interaction.user.id != self.owner_id:
+            await interaction.response.send_message("Abre tu propio catálogo con m!catalogo.", ephemeral=True)
+            return False
+        return True
+
+
+class NovelDetailView(discord.ui.View):
+    def __init__(self, owner_id, group):
+        super().__init__(timeout=180)
+        self.owner_id = owner_id
+        self.group = group
+        self.message = None
+
+    def embed(self):
+        group = self.group
+        embed = discord.Embed(
+            title=f'📖 {group["name"][:240]}',
+            description="Ficha extraída de una publicación de Telegram. Asociación de PDF provisional.",
+            color=discord.Color.from_rgb(150, 90, 225),
+        )
+        for label, key in (("✍️ Autor", "author"), ("🏷️ Géneros", "genres"), ("📌 Estado", "status")):
+            value = group.get(key)
+            if value:
+                embed.add_field(name=label, value=discord.utils.escape_markdown(str(value)[:900]), inline=False)
+        cover = group.get("cover_url")
+        if isinstance(cover, str) and re.fullmatch(r"https://[^\s<>]+\.(?:png|jpe?g|webp)(?:\?[^\s<>]*)?", cover, re.I):
+            embed.set_thumbnail(url=cover)
+        synopsis = group.get("synopsis")
+        if synopsis:
+            embed.add_field(
+                name="📜 Sinopsis",
+                value=discord.utils.escape_mentions(discord.utils.escape_markdown(synopsis[:1000])),
+                inline=False,
+            )
+        else:
+            embed.add_field(name="📜 Sinopsis", value="No disponible en la ficha analizada.", inline=False)
+        embed.add_field(name="📄 PDF asociados", value=str(len(group["items"])), inline=True)
+        embed.set_footer(text=f'Publicación de metadatos: {group.get("metadata_message_id") or "sin ID"} · Magician')
+        return embed
+
+    async def interaction_check(self, interaction):
+        if interaction.user.id != self.owner_id:
+            await interaction.response.send_message("Abre tu propio catálogo con m!catalogo.", ephemeral=True)
+            return False
+        return True
+
+    @discord.ui.button(label="⭐ Favorito", style=discord.ButtonStyle.secondary, row=1)
+    async def favorite(self, interaction, button):
+        await readers.save(interaction.user.id, self.group, favorite=True)
+        await interaction.response.send_message("⭐ Novela guardada en tus favoritos. Usa `m!misfavoritos`.", ephemeral=True)
+
+    @discord.ui.button(label="Solicitar PDF", emoji="📥", style=discord.ButtonStyle.success)
+    async def request_pdf(self, interaction, button):
+        await readers.save(interaction.user.id, self.group)
+        documents = [(message_id, title) for message_id, title, _ in self.group["items"]]
+        approved = authorized_keys_for_documents(documents)
+        approved_entries = [(key, get_authorized_entry(key)) for key, _ in approved]
+        items = sorted(documents, key=lambda item: document_sort_key(item[1]))
+        choices = []
+        for message_id, title in items:
+            key = next((key for key, entry in approved_entries
+                        if entry["filename"] == title and
+                        (entry.get("source") != "telegram" or
+                         entry.get("telegram_message_id") == message_id)), None)
+            choices.append((message_id, title, key))
+        if not choices:
+            await interaction.response.send_message("📄 No hay PDF asociados a esta obra.", ephemeral=True)
+            return
+        available = sum(key is not None for _, _, key in choices)
+        view = AuthorizedPDFView(interaction.user.id, choices)
+        await interaction.response.send_message(
+            f"📚 {len(choices)} PDF en el catálogo · {available} habilitado(s) para entrega. "
+            "Los demás se muestran para consulta, pero todavía no pueden enviarse.",
+            view=view, ephemeral=True,
+        )
+
+    @discord.ui.button(label="Ver documentos", emoji="📄", style=discord.ButtonStyle.primary)
+    async def documents(self, interaction, button):
+        await readers.save(interaction.user.id, self.group)
+        items = sorted(self.group["items"], key=lambda item: document_sort_key(item[1]))
+        results = [(title, url) for _, title, url in items]
+        view = ResultsView(interaction.user.id, results, f'📄 {self.group["name"][:140]} · Orden de lectura provisional')
+        await interaction.response.send_message(
+            embed=view.embed(), view=view, ephemeral=True,
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
+        view.message = await interaction.original_response()
+
+
+class CatalogSearchModal(discord.ui.Modal, title="Buscar en el catálogo"):
+    query = discord.ui.TextInput(label="Título, autor o género", placeholder="Ejemplo: fantasía", max_length=100)
+
+    def __init__(self, catalog_view):
+        super().__init__()
+        self.catalog_view = catalog_view
+
+    async def on_submit(self, interaction):
+        view = self.catalog_view
+        matches = readers.search(view.all_groups, str(self.query.value))
+        if not matches:
+            await interaction.response.send_message("🔎 No encontré novelas con ese título en las fichas analizadas.", ephemeral=True)
+            return
+        view.groups = matches
+        view.page = 0
+        view.refresh()
+        await interaction.response.edit_message(embed=view.embed(), view=view)
+
+
+class CatalogView(discord.ui.View):
+    def __init__(self, owner_id, groups):
+        super().__init__(timeout=180)
+        self.owner_id = owner_id
+        self.all_groups = groups
+        self.groups = groups
+        self.page = 0
+        self.message = None
+        self.refresh()
+
+    @property
+    def total_pages(self):
+        return max(1, (len(self.groups) + 9) // 10)
+
+    def refresh(self):
+        self.previous.disabled = self.page == 0
+        self.next_page.disabled = self.page == self.total_pages - 1
+        self.clear_items()
+        if self.groups:
+            self.add_item(CatalogSelect(self))
+        self.add_item(self.previous)
+        self.add_item(self.next_page)
+        self.add_item(self.search)
+        self.add_item(self.reset_search)
+        self.reset_search.disabled = self.groups is self.all_groups
+
+    def embed(self):
+        start = self.page * 10
+        groups = self.groups[start:start + 10]
+        lines = [
+            f'**{start + i + 1:02d}.** {discord.utils.escape_markdown(group["name"][:150])} '
+            f'· **{len(group["items"])}** PDF'
+            for i, group in enumerate(groups)
+        ]
+        embed = discord.Embed(
+            title="📚 Magician 4.0 · Catálogo de obras",
+            description="Obras identificadas por publicaciones de Telegram. Las asociaciones de PDF son provisionales.\n\n" + "\n".join(lines),
+            color=discord.Color.from_rgb(150, 90, 225),
+        )
+        embed.set_footer(text=f'Página {self.page + 1}/{self.total_pages} · {len(self.groups)} obras · Magician Library')
+        return embed
+
+    async def interaction_check(self, interaction):
+        if interaction.user.id != self.owner_id:
+            await interaction.response.send_message(
+                "Abre tu propio catálogo con m!catalogo.", ephemeral=True
+            )
+            return False
+        return True
+
+    @discord.ui.button(label="Buscar", emoji="🔎", style=discord.ButtonStyle.success, row=2)
+    async def search(self, interaction, button):
+        await interaction.response.send_modal(CatalogSearchModal(self))
+
+    @discord.ui.button(label="Mostrar todas", emoji="📚", style=discord.ButtonStyle.secondary, row=2)
+    async def reset_search(self, interaction, button):
+        self.groups = self.all_groups
+        self.page = 0
+        self.refresh()
+        await interaction.response.edit_message(embed=self.embed(), view=self)
+
+    @discord.ui.button(label="Anterior", emoji="◀️", style=discord.ButtonStyle.secondary, row=1)
+    async def previous(self, interaction, button):
+        self.page = max(0, self.page - 1)
+        self.refresh()
+        await interaction.response.edit_message(embed=self.embed(), view=self)
+
+    @discord.ui.button(label="Siguiente", emoji="▶️", style=discord.ButtonStyle.primary, row=1)
+    async def next_page(self, interaction, button):
+        self.page = min(self.total_pages - 1, self.page + 1)
+        self.refresh()
+        await interaction.response.edit_message(embed=self.embed(), view=self)
+
+    async def on_timeout(self):
+        for child in self.children:
+            child.disabled = True
+        if self.message:
+            try:
+                await self.message.edit(view=self)
+            except discord.HTTPException:
+                pass
 
 
 class Magician(commands.Bot):
@@ -24,6 +585,7 @@ class Magician(commands.Bot):
 
     async def setup_hook(self):
         await init_db()
+        await readers.initialize()
 
 
 bot = Magician()
@@ -31,59 +593,183 @@ bot = Magician()
 
 @bot.event
 async def on_ready():
-    logger.info("Magician connected as %s", bot.user)
+    logger.info("Magician conectado como %s", bot.user)
 
 
 @bot.command(name="ping")
-async def ping(ctx: commands.Context):
-    """Comprueba que Magician está activo."""
+async def ping(ctx):
     await ctx.send(f"🪄 ¡Magician está activo! Latencia: {round(bot.latency * 1000)} ms")
 
 
+async def send_results(ctx, query, heading):
+    results = await find_titles(query)
+    if not results:
+        await ctx.send("📚 No encontré coincidencias. Prueba con parte del título.")
+        return
+    view = ResultsView(ctx.author.id, results, heading)
+    view.message = await ctx.send(embed=view.embed(), view=view, allowed_mentions=discord.AllowedMentions.none())
+
+
 @bot.command(name="buscar")
-async def buscar(ctx: commands.Context, *, titulo: str = ""):
-    """Busca novelas por título."""
+async def buscar(ctx, *, titulo=""):
     if not titulo.strip():
         await ctx.send("Uso: `m!buscar nombre de la novela`")
         return
-    novels = await search_novels(titulo)
-    if not novels:
-        await ctx.send("📚 No encontré coincidencias. El catálogo todavía puede estar vacío.")
+    await send_results(ctx, titulo, f"🔎 Resultados para: {titulo[:150]}")
+
+
+async def _story_groups():
+    try:
+        return await attach_public_document_links(load_story_groups())
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        logger.warning("No se pudieron cargar fichas: %s", exc)
+        return []
+
+
+@bot.command(name="recomendar", aliases=["recomendacion"])
+async def recomendar(ctx, *, preferencia=""):
+    groups, note = await readers.recommend(ctx.author.id, preferencia)
+    if not groups:
+        await ctx.send("🪄 No encontré novelas para recomendar con ese filtro. Prueba otro género.")
         return
-    lines = []
-    for name, source_url in novels:
-        line = f"• **{discord.utils.escape_markdown(name)}**"
-        if source_url:
-            line += f" — {source_url}"
-        lines.append(line)
-    await ctx.send("\n".join(lines)[:1900], allowed_mentions=discord.AllowedMentions.none())
+    embed = discord.Embed(title="✨ Recomendaciones de Magician",
+                          description=note + "\n\n" + "\n".join(
+                              f"**{i}. {discord.utils.escape_markdown(g['name'][:100])}** — "
+                              f"{discord.utils.escape_markdown((g.get('genres') or 'Género sin especificar')[:110])}"
+                              for i,g in enumerate(groups,1)),
+                          color=discord.Color.purple())
+    embed.set_footer(text="Las recomendaciones usan metadatos del catálogo, no reseñas verificadas.")
+    await ctx.send(embed=embed, allowed_mentions=discord.AllowedMentions.none())
+
+
+@bot.command(name="misfavoritos", aliases=["favoritos"])
+async def misfavoritos(ctx):
+    rows = (await readers.entries(ctx.author.id, favorites=True))[:10]
+    if not rows:
+        await ctx.send("⭐ No tienes favoritos. Abre una ficha con m!catalogo y pulsa ⭐ Favorito.")
+        return
+    await ctx.send("⭐ **Tus favoritos**\n" + "\n".join(
+        f"{i}. {discord.utils.escape_markdown(title[:150])}" for i,(_,title,_) in enumerate(rows,1)),
+        allowed_mentions=discord.AllowedMentions.none())
+
+
+@bot.command(name="historial")
+async def historial(ctx):
+    rows = (await readers.entries(ctx.author.id))[:10]
+    if not rows:
+        await ctx.send("📖 Tu historial está vacío. Abre documentos desde m!catalogo.")
+        return
+    await ctx.send("📖 **Tu historial**\n" + "\n".join(
+        f"{i}. {discord.utils.escape_markdown(title[:150])}" for i,(_,title,_) in enumerate(rows,1)),
+        allowed_mentions=discord.AllowedMentions.none())
+
+
+@bot.command(name="explorar")
+async def explorar(ctx, *, consulta=""):
+    if not consulta.strip():
+        await ctx.send("Uso: `m!explorar fantasía` (busca título, autor o género)")
+        return
+    groups = readers.search(await _story_groups(), consulta)[:100]
+    if not groups:
+        await ctx.send("🔎 No encontré fichas con esa búsqueda.")
+        return
+    view = CatalogView(ctx.author.id, groups)
+    view.message = await ctx.send(embed=view.embed(), view=view, allowed_mentions=discord.AllowedMentions.none())
 
 
 @bot.command(name="recientes")
-async def recientes(ctx: commands.Context):
-    """Muestra las últimas novelas registradas."""
-    novels = await recent_novels()
-    if not novels:
-        await ctx.send("📚 Aún no hay novelas registradas.")
-        return
-    await ctx.send("\n".join(f"• **{discord.utils.escape_markdown(title)}**" for title in novels)[:1900])
+async def recientes(ctx):
+    await send_results(ctx, "", "📚 Novelas recientes")
 
 
 @bot.command(name="biblioteca")
-async def biblioteca(ctx: commands.Context):
-    """Muestra el catálogo reciente."""
-    await recientes(ctx)
+async def biblioteca(ctx):
+    await send_results(ctx, "", "🪄 Biblioteca Magician")
+
+
+@bot.command(name="catalogo")
+async def catalogo(ctx):
+    try:
+        groups = await attach_public_document_links(load_story_groups())
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        logger.warning("No se pudo cargar story_preview.json: %s", exc)
+        groups = []
+    if not groups:
+        await ctx.send("📚 No hay fichas de novelas disponibles. Genera story_preview.json con telegram_story_analyzer.py. Mientras tanto puedes usar m!buscar.")
+        return
+    view = CatalogView(ctx.author.id, groups)
+    view.message = await ctx.send(embed=view.embed(), view=view, allowed_mentions=discord.AllowedMentions.none())
+
+
+@bot.command(name="novela")
+async def novela(ctx, *, titulo=""):
+    if not titulo.strip():
+        await ctx.send("Uso: m!novela nombre de la obra")
+        return
+    results = await find_novel_volumes(titulo)
+    if not results:
+        await ctx.send("📚 No encontré volúmenes agrupables. Prueba m!buscar.")
+        return
+    view = ResultsView(ctx.author.id, results, f"📖 Volúmenes: {titulo[:120]}")
+    view.message = await ctx.send(embed=view.embed(), view=view, allowed_mentions=discord.AllowedMentions.none())
+
+
+@bot.command(name="estadisticas", aliases=["stats"])
+async def estadisticas(ctx):
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute("SELECT COUNT(*) FROM novels") as cursor:
+            count = (await cursor.fetchone())[0]
+        async with db.execute("SELECT COUNT(DISTINCT telegram_chat_id) FROM novels") as cursor:
+            channels = (await cursor.fetchone())[0]
+    embed = discord.Embed(
+        title="📊 Estadísticas de Magician",
+        description="Resumen del catálogo local de metadatos.",
+        color=discord.Color.purple(),
+    )
+    embed.add_field(name="📚 Documentos indexados", value=str(count))
+    embed.add_field(name="📡 Canales registrados", value=str(channels))
+    embed.set_footer(text="Actualizado tras ejecutar telegram_indexer.py")
+    await ctx.send(embed=embed)
+
+
+@bot.command(name="entregar")
+@commands.cooldown(1, 20, commands.BucketType.user)
+async def entregar(ctx, *, clave=""):
+    """Deliver a locally approved PDF, not arbitrary Telegram files."""
+    if not clave.strip():
+        await ctx.send("Uso: `m!entregar clave` (solo documentos autorizados).")
+        return
+    try:
+        await send_approved_pdf(ctx, clave.strip(), "📚 Aquí tienes el documento autorizado solicitado.")
+    except DeliveryError as exc:
+        await ctx.send(f"📄 {exc}")
+    except (discord.Forbidden, discord.HTTPException):
+        await ctx.send("⚠️ No pude adjuntar el archivo en este canal.")
 
 
 @bot.command(name="ayuda")
-async def ayuda(ctx: commands.Context):
-    await ctx.send("🪄 **Magician**\n`m!ping` — Estado\n`m!buscar título` — Buscar novela\n`m!recientes` — Últimas novelas\n`m!biblioteca` — Biblioteca\n`m!ayuda` — Esta ayuda")
-
+async def ayuda(ctx):
+    await ctx.send(
+        "🪄 **Magician 4.0**\n"
+        "`m!ping` — Estado\n"
+        "`m!buscar título` — Búsqueda aproximada\n"
+        "`m!recientes` — Últimas novelas\n"
+        "`m!biblioteca` — Catálogo paginado\n"
+        "`m!catalogo` — Obras agrupadas con menú\n"
+        "`m!novela título` — Volúmenes de una obra\n"
+        "`m!estadisticas` — Resumen del catálogo\n"
+        "`m!explorar consulta` — Buscar título, autor o género\n"
+        "`m!recomendar [género]` — Recomendaciones personalizadas\n"
+        "`m!misfavoritos` — Biblioteca de favoritos\n"
+        "`m!historial` — Obras consultadas\n"
+        "`m!entregar clave` — Enviar PDF autorizado al canal\n"
+        "`m!ayuda` — Comandos"
+    )
 
 async def main():
     token = os.getenv("DISCORD_TOKEN", "").strip()
     if not token:
-        raise RuntimeError("Falta DISCORD_TOKEN. Configúralo como secreto o en .env.")
+        raise RuntimeError("Falta DISCORD_TOKEN en .env")
     async with bot:
         await bot.start(token)
 

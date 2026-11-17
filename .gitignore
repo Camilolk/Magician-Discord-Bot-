@@ -234,3 +234,17 @@ venv/
 # Archivos temporales de Python
 __pycache__/
 *.pyc
+# Vista previa local de publicaciones de Telegram
+story_preview*.json
+
+story_audit*.json
+story_review_queue*.json
+story_grouped_review*.json
+story_review_decisions*.json
+telegram_evidence*.json
+story_candidate_comparison*.json
+telegram_document_comparison*.json
+story_assisted_review*.json
+story_evidence_report*.json
+authorized_pdfs/
+authorized_pdfs.json

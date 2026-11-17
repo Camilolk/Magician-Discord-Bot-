@@ -1,0 +1,4 @@
+{
+  "aliases": {},
+  "notes": "Add verified alternate titles as {\"Canonical title\": [\"Alternative title\"]}. Unverified suggestions must not be added automatically."
+}
