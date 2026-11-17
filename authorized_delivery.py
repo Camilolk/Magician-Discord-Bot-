@@ -4,12 +4,14 @@ Only files explicitly listed in authorized_pdfs.json can be sent.
 No Telegram downloads or automatic redistribution are performed.
 """
 import json
+import sqlite3
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
 PDF_ROOT = ROOT / "authorized_pdfs"
 MANIFEST = ROOT / "authorized_pdfs.json"
 MAX_BYTES = 8 * 1024 * 1024
+CHANNEL_GRANTS = ROOT / "authorized_channels.json"
 
 
 class DeliveryError(Exception):
@@ -42,6 +44,40 @@ def get_authorized_pdf(key):
     return path
 
 
+def _channel_entry(chat_id, message_id):
+    from database import DB_PATH
+    try:
+        grants = json.loads(CHANNEL_GRANTS.read_text(encoding="utf-8")).get("channels", {})
+        if grants.get(str(chat_id), {}).get("redistribution_authorized") is not True:
+            raise DeliveryError("El canal no está habilitado.")
+        with sqlite3.connect(DB_PATH) as db:
+            row = db.execute("SELECT title FROM novels WHERE telegram_chat_id=? AND telegram_message_id=?", (chat_id, message_id)).fetchone()
+    except (OSError, ValueError, AttributeError, sqlite3.Error) as exc:
+        raise DeliveryError("No pude validar el documento en el canal autorizado.") from exc
+    if not row:
+        raise DeliveryError("Documento no indexado.")
+    filename = row[0] + ".pdf"
+    if Path(filename).name != filename or not filename.lower().endswith(".pdf"):
+        raise DeliveryError("Nombre de archivo no válido.")
+    return {"source": "telegram", "filename": filename, "telegram_chat_id": chat_id, "telegram_message_id": message_id, "redistribution_authorized": True}
+
+
+def _channel_key(message_id, filename):
+    from database import DB_PATH
+    if not CHANNEL_GRANTS.is_file() or not isinstance(message_id, int):
+        return None
+    try:
+        grants = json.loads(CHANNEL_GRANTS.read_text(encoding="utf-8")).get("channels", {})
+        with sqlite3.connect(DB_PATH) as db:
+            rows = db.execute("SELECT telegram_chat_id FROM novels WHERE telegram_message_id=? AND title=?", (message_id, Path(filename).stem)).fetchall()
+        for (chat_id,) in rows:
+            if grants.get(str(chat_id), {}).get("redistribution_authorized") is True:
+                return f"channel:{chat_id}:{message_id}"
+    except (OSError, ValueError, AttributeError, sqlite3.Error):
+        pass
+    return None
+
+
 def authorized_keys_for_documents(documents):
     """Match approved entries to catalog PDFs by Telegram message ID when provided.
 
@@ -72,11 +108,22 @@ def authorized_keys_for_documents(documents):
             if key not in seen:
                 choices.append((key, filename))
                 seen.add(key)
+    for message_id, filename in documents:
+        key = _channel_key(message_id, filename)
+        if key and key not in seen:
+            choices.append((key, filename))
+            seen.add(key)
     return choices
 
 
 def get_authorized_entry(key):
     """Return a validated explicit permission entry for local or Telegram delivery."""
+    if isinstance(key, str) and key.startswith("channel:"):
+        try:
+            _, chat_id, message_id = key.split(":")
+            return _channel_entry(int(chat_id), int(message_id))
+        except ValueError as exc:
+            raise DeliveryError("Identificador de documento inválido.") from exc
     if not MANIFEST.is_file():
         raise DeliveryError("Todavía no hay documentos autorizados configurados.")
     try:
