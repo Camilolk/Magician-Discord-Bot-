@@ -11,6 +11,25 @@ from dotenv import load_dotenv
 
 from authorized_delivery import DeliveryError, MAX_BYTES
 
+_client = None
+_client_lock = asyncio.Lock()
+
+
+async def _get_client(api_id, api_hash, session):
+    """Reuse a connected Telegram session across sequential PDF requests."""
+    global _client
+    if _client is not None and _client.is_connected():
+        return _client
+    if _client is not None:
+        await _client.disconnect()
+    _client = TelegramClient(session, api_id, api_hash)
+    await _client.connect()
+    if not await _client.is_user_authorized():
+        await _client.disconnect()
+        _client = None
+        raise DeliveryError("La sesión de Telegram no está autorizada. Ejecuta primero el indexador.")
+    return _client
+
 
 async def download_approved_telegram_pdf(entry, directory):
     chat_id = entry.get("telegram_chat_id")
@@ -28,7 +47,8 @@ async def download_approved_telegram_pdf(entry, directory):
         raise DeliveryError("Configura TELEGRAM_API_ID y TELEGRAM_API_HASH en .env.") from exc
 
     session = os.getenv("TELEGRAM_SESSION_PATH", "magician_telegram")
-    async with TelegramClient(session, api_id, api_hash) as client:
+    async with _client_lock:
+        client = await _get_client(api_id, api_hash, session)
         try:
             message = await client.get_messages(chat_id, ids=message_id)
         except Exception as exc:
