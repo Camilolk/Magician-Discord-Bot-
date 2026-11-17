@@ -34,7 +34,7 @@ async def find_titles(query="", limit=None):
         ) as cursor:
             records = await cursor.fetchall()
     if not query.strip():
-        return records[:MAX_RESULTS]
+        return records
     needle = normalize(query)
     matches = []
     for title, url in records:
