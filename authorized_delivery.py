@@ -40,3 +40,21 @@ def get_authorized_pdf(key):
     if size == 0 or size > MAX_BYTES:
         raise DeliveryError("El PDF está vacío o supera el límite configurado de 8 MB.")
     return path
+
+
+def authorized_keys_for_filenames(filenames):
+    """Return only explicit allowlist keys matching the given document names."""
+    if not MANIFEST.is_file():
+        return []
+    try:
+        entries = json.loads(MANIFEST.read_text(encoding="utf-8")).get("documents", {})
+    except (OSError, ValueError, AttributeError):
+        return []
+    if not isinstance(entries, dict):
+        return []
+    allowed = set(filenames)
+    return [(key, entry["filename"]) for key, entry in entries.items()
+            if isinstance(key, str) and isinstance(entry, dict)
+            and entry.get("redistribution_authorized") is True
+            and isinstance(entry.get("filename"), str)
+            and entry["filename"] in allowed]
