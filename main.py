@@ -27,10 +27,10 @@ def normalize(value):
     return re.sub(r"[^\w]+", " ", value).strip()
 
 
-async def find_titles(query="", limit=5000):
+async def find_titles(query="", limit=None):
     async with aiosqlite.connect(DB_PATH) as db:
         async with db.execute(
-            "SELECT title, source_url FROM novels ORDER BY id DESC LIMIT ?", (limit,)
+            "SELECT title, source_url FROM novels ORDER BY id DESC"
         ) as cursor:
             records = await cursor.fetchall()
     if not query.strip():
