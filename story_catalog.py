@@ -15,33 +15,57 @@ def normalized(value):
 
 
 def extract_synopsis(text):
-    """Only use text explicitly labeled Sinopsis/Resumen in source metadata."""
+    """Extract labeled synopses or introductory prose preceding Telegram metadata."""
     if not text:
         return ""
     lines = text.splitlines()
-    start = None
-    result = []
-    for i, line in enumerate(lines):
-        match = re.match(r"^\\s*(?:📖|📜|📝|📚)?\\s*(?:sinopsis|resumen|descripción|descripcion)\\s*[:：-]?\\s*(.*)$", line, re.I)
-        if match:
-            start = i
-            if match.group(1).strip():
-                result.append(match.group(1).strip())
-            break
-    if start is None:
-        return ""
-    for line in lines[start + 1:]:
-        stripped = line.strip()
-        if not stripped:
-            if result:
-                break
+    metadata_heading = re.compile(
+        r"^[^\\w\\r\\n]{0,16}\\s*(?:t[ií]tulo|nombre|obra|autor(?:es)?|author|origen|estado|"
+        r"cap[ií]tulos?|vol[uú]men(?:es)?|g[eé]nero(?:s)?|fansubs|ilustraciones|"
+        r"otras obras del autor|descarga|enlaces?)\\s*[:：]",
+        re.I,
+    )
+    label = re.compile(
+        r"^\\s*(?:📖|📜|📝|📚)?\\s*(?:sinopsis|resumen|descripci[oó]n)\\s*[:：-]\\s*(.*)$",
+        re.I,
+    )
+    # Explicitly labeled text takes priority, wherever it occurs.
+    for index, line in enumerate(lines):
+        match = label.match(line)
+        if not match:
             continue
-        if re.match(r"^[^\\w\\r\\n]{0,16}\\s*(?:t[ií]tulo|autor|origen|estado|vol[uú]men|g[eé]nero|fansubs|otras obras|descarga|enlaces?)\\s*[:：]", stripped, re.I):
-            break
-        if stripped.startswith("#") and result:
-            break
-        result.append(stripped)
-    return " ".join(result).strip()[:1800]
+        parts = [match.group(1).strip()] if match.group(1).strip() else []
+        for following in lines[index + 1:]:
+            value = following.strip()
+            if metadata_heading.match(value) or label.match(value) or (value.startswith("#") and parts):
+                break
+            if not value:
+                if parts:
+                    break
+                continue
+            parts.append(value)
+        if parts:
+            return " ".join(parts)[:1800]
+
+    # Many posts start with unlabelled synopsis paragraphs before 🔰⊳Titulo.
+    first_heading = next((i for i, line in enumerate(lines) if metadata_heading.match(line.strip())), None)
+    if first_heading is None or first_heading == 0:
+        return ""
+    introduction = []
+    for line in lines[:first_heading]:
+        value = line.strip()
+        if not value:
+            if introduction:
+                introduction.append("")
+            continue
+        if value.startswith("#") or value.startswith(("http://", "https://", "@")):
+            return ""
+        introduction.append(value)
+    prose = "\\n".join(introduction).strip()
+    # Avoid treating short announcements, tags or a standalone heading as a synopsis.
+    if len(prose) < 65 or len(prose.split()) < 12:
+        return ""
+    return prose[:1800]
 
 
 def load_story_groups(path=PREVIEW_PATH):
