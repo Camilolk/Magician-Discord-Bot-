@@ -42,6 +42,9 @@ def title_parts(title):
     match = re.search(r"\s+(?:vol(?:umen|ume)?\.?|tomo)\s*0*(\d{1,3})$", value, re.I)
     if match:
         return value[:match.start()].strip(" -"), int(match.group(1))
+    match = re.search(r"\s+[-–]\s*0*(\d{1,3})$", value)
+    if match:
+        return value[:match.start()].strip(), int(match.group(1))
     return value, None
 
 
