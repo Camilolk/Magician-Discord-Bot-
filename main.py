@@ -235,14 +235,7 @@ class CatalogSelect(discord.ui.Select):
 
     async def callback(self, interaction):
         group = self.catalog_view.groups[int(self.values[0])]
-        items = sorted(
-            group["items"],
-            key=lambda item: (item[0] is None, item[0] or 0, normalize(item[1])),
-        )
-        results = [(title, url) for _, title, url in items]
-        view = ResultsView(interaction.user.id, results, f'📖 {group["name"][:180]}')
-        if group.get("provisional"):
-            view.heading = f'📖 {group["name"][:150]} · Asociación provisional'
+        view = NovelDetailView(interaction.user.id, group)
         await interaction.response.send_message(
             embed=view.embed(), view=view, ephemeral=True,
             allowed_mentions=discord.AllowedMentions.none(),
@@ -250,10 +243,71 @@ class CatalogSelect(discord.ui.Select):
         view.message = await interaction.original_response()
 
 
+class NovelDetailView(discord.ui.View):
+    def __init__(self, owner_id, group):
+        super().__init__(timeout=180)
+        self.owner_id = owner_id
+        self.group = group
+        self.message = None
+
+    def embed(self):
+        group = self.group
+        embed = discord.Embed(
+            title=f'📖 {group["name"][:240]}',
+            description="Ficha extraída de una publicación de Telegram. Asociación de PDF provisional.",
+            color=discord.Color.from_rgb(150, 90, 225),
+        )
+        for label, key in (("✍️ Autor", "author"), ("🏷️ Géneros", "genres"), ("📌 Estado", "status")):
+            value = group.get(key)
+            if value:
+                embed.add_field(name=label, value=discord.utils.escape_markdown(str(value)[:900]), inline=False)
+        embed.add_field(name="📄 PDF asociados", value=str(len(group["items"])), inline=True)
+        embed.set_footer(text=f'Publicación de metadatos: {group.get("metadata_message_id") or "sin ID"} · Magician')
+        return embed
+
+    async def interaction_check(self, interaction):
+        if interaction.user.id != self.owner_id:
+            await interaction.response.send_message("Abre tu propio catálogo con m!catalogo.", ephemeral=True)
+            return False
+        return True
+
+    @discord.ui.button(label="Ver documentos", emoji="📄", style=discord.ButtonStyle.primary)
+    async def documents(self, interaction, button):
+        items = sorted(self.group["items"], key=lambda item: normalize(item[1]))
+        results = [(title, url) for _, title, url in items]
+        view = ResultsView(interaction.user.id, results, f'📄 {self.group["name"][:140]} · Provisional')
+        await interaction.response.send_message(
+            embed=view.embed(), view=view, ephemeral=True,
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
+        view.message = await interaction.original_response()
+
+
+class CatalogSearchModal(discord.ui.Modal, title="Buscar en el catálogo"):
+    query = discord.ui.TextInput(label="Título de la novela", placeholder="Ejemplo: Majo no Tabitabi", max_length=100)
+
+    def __init__(self, catalog_view):
+        super().__init__()
+        self.catalog_view = catalog_view
+
+    async def on_submit(self, interaction):
+        view = self.catalog_view
+        needle = normalize(str(self.query.value))
+        matches = [group for group in view.all_groups if needle in normalize(group["name"])]
+        if not matches:
+            await interaction.response.send_message("🔎 No encontré novelas con ese título en las fichas analizadas.", ephemeral=True)
+            return
+        view.groups = matches
+        view.page = 0
+        view.refresh()
+        await interaction.response.edit_message(embed=view.embed(), view=view)
+
+
 class CatalogView(discord.ui.View):
     def __init__(self, owner_id, groups):
         super().__init__(timeout=180)
         self.owner_id = owner_id
+        self.all_groups = groups
         self.groups = groups
         self.page = 0
         self.message = None
@@ -271,6 +325,9 @@ class CatalogView(discord.ui.View):
             self.add_item(CatalogSelect(self))
         self.add_item(self.previous)
         self.add_item(self.next_page)
+        self.add_item(self.search)
+        self.add_item(self.reset_search)
+        self.reset_search.disabled = self.groups is self.all_groups
 
     def embed(self):
         start = self.page * 10
@@ -281,7 +338,7 @@ class CatalogView(discord.ui.View):
             for i, group in enumerate(groups)
         ]
         embed = discord.Embed(
-            title="📚 Magician 3.1 · Catálogo de obras",
+            title="📚 Magician 3.2 · Catálogo de obras",
             description="Obras identificadas por publicaciones de Telegram. Las asociaciones de PDF son provisionales.\n\n" + "\n".join(lines),
             color=discord.Color.from_rgb(150, 90, 225),
         )
@@ -295,6 +352,17 @@ class CatalogView(discord.ui.View):
             )
             return False
         return True
+
+    @discord.ui.button(label="Buscar", emoji="🔎", style=discord.ButtonStyle.success, row=2)
+    async def search(self, interaction, button):
+        await interaction.response.send_modal(CatalogSearchModal(self))
+
+    @discord.ui.button(label="Mostrar todas", emoji="📚", style=discord.ButtonStyle.secondary, row=2)
+    async def reset_search(self, interaction, button):
+        self.groups = self.all_groups
+        self.page = 0
+        self.refresh()
+        await interaction.response.edit_message(embed=self.embed(), view=self)
 
     @discord.ui.button(label="Anterior", emoji="◀️", style=discord.ButtonStyle.secondary, row=1)
     async def previous(self, interaction, button):
