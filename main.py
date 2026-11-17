@@ -52,6 +52,36 @@ async def find_titles(query="", limit=None):
     return [(title, url) for _, title, url in matches[:MAX_RESULTS]]
 
 
+
+def volume_number(title):
+    match = re.search(r"(?:vol(?:umen|ume)?\\.?\\s*|tomo\\s*|[-–]\\s*)?(\\d{1,3})$", clean_title(title), re.I)
+    return int(match.group(1)) if match else None
+
+
+def novel_group_key(title):
+    value = re.sub(r"^\\d{1,3}\\s*[-.·]\\s*", "", clean_title(title))
+    value = re.sub(r"(?:\\s*[-–:]?\\s*(?:vol(?:umen|ume)?\\.?|tomo)\\s*)?\\d{1,3}$", "", value, flags=re.I)
+    return normalize(value)
+
+
+async def find_novel_volumes(query):
+    records = await find_titles("")
+    needle = normalize(query)
+    families = {}
+    for title, url in records:
+        key = novel_group_key(title)
+        if needle in key or key == needle:
+            families.setdefault(key, []).append((title, url))
+    if not families:
+        return []
+    family = max(families, key=lambda key: (fuzz.ratio(needle, key), len(families[key])))
+    unique = {}
+    for title, url in families[family]:
+        vol = volume_number(title)
+        unique.setdefault(("volume", vol) if vol is not None else ("title", normalize(clean_title(title))), (title, url))
+    return sorted(unique.values(), key=lambda row: (volume_number(row[0]) is None, volume_number(row[0]) or 0, normalize(row[0])))
+
+
 class JumpModal(discord.ui.Modal, title="Ir a una página"):
     page_number = discord.ui.TextInput(
         label="Número de página", placeholder="Ejemplo: 7", max_length=5
@@ -212,7 +242,12 @@ async def novela(ctx, *, titulo=""):
     if not titulo.strip():
         await ctx.send("Uso: m!novela nombre de la obra")
         return
-    await send_results(ctx, titulo, f"📖 Coincidencias: {titulo[:120]}")
+    results = await find_novel_volumes(titulo)
+    if not results:
+        await ctx.send("📚 No encontré volúmenes agrupables. Prueba m!buscar.")
+        return
+    view = ResultsView(ctx.author.id, results, f"📖 Volúmenes: {titulo[:120]}")
+    view.message = await ctx.send(embed=view.embed(), view=view, allowed_mentions=discord.AllowedMentions.none())
 
 
 @bot.command(name="estadisticas", aliases=["stats"])
