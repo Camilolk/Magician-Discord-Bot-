@@ -19,10 +19,10 @@ def classify_group(items):
 
 
 def filename_pattern(name):
-    stem = re.sub(r"(?i)\\.pdf$", "", name).strip()
-    stem = re.sub(r"(?i)\\b(?:vol(?:umen|ume)?|tomo)\\.?\\s*\\d+(?:\\.\\d+)?\\b.*$", "", stem)
-    stem = re.sub(r"(?i)[\\[(]?\\s*\\d{1,5}\\s*[-–_]\\s*\\d{1,5}\\s*[\\])]?$", "", stem)
-    stem = re.sub(r"(?i)\\s*\\d{1,3}\\s*[-–]\\s*[^/]+$", "", stem)
+    stem = re.sub(r"(?i)\.pdf$", "", name).strip()
+    stem = re.sub(r"(?i)\b(?:vol(?:umen|ume)?|tomo)\.?\s*\d+(?:\.\d+)?\b.*$", "", stem)
+    stem = re.sub(r"(?i)[\[(]?\s*\d{1,5}\s*[-–_]\s*\d{1,5}\s*[\])]?$", "", stem)
+    stem = re.sub(r"(?i)\s*\d{1,3}\s*[-–]\s*[^/]+$", "", stem)
     return stem.strip(" -_.[]()")
 
 
