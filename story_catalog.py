@@ -117,5 +117,6 @@ def load_story_groups(path=PREVIEW_PATH):
                 "synopsis": extract_synopsis(work.get("description_full") or work.get("description_excerpt") or ""),
                 "metadata_message_id": work.get("message_id"),
                 "provisional": True,
+                "cover_url": (work.get("cover_url") or "").strip(),
             })
     return sorted(groups, key=lambda g: (normalized(g["name"]), g["metadata_message_id"] or 0))
