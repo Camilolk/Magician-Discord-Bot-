@@ -13,7 +13,7 @@ from rapidfuzz import fuzz
 
 from database import DB_PATH, init_db
 from story_catalog import load_story_groups, document_sort_key
-from authorized_delivery import get_authorized_pdf, DeliveryError
+from authorized_delivery import get_authorized_pdf, authorized_keys_for_filenames, DeliveryError
 
 load_dotenv()
 logging.basicConfig(level=logging.INFO)
@@ -273,6 +273,48 @@ class CatalogSelect(discord.ui.Select):
         view.message = await interaction.original_response()
 
 
+class AuthorizedPDFSelect(discord.ui.Select):
+    def __init__(self, choices):
+        self.choices = choices
+        options = [
+            discord.SelectOption(label=name[:100], value=str(i), emoji="📄")
+            for i, (_, name) in enumerate(choices)
+        ]
+        super().__init__(placeholder="📥 Elige un PDF autorizado", options=options)
+
+    async def callback(self, interaction):
+        key, name = self.choices[int(self.values[0])]
+        try:
+            path = get_authorized_pdf(key)
+        except DeliveryError as exc:
+            await interaction.response.send_message(f"📄 {exc}", ephemeral=True)
+            return
+        await interaction.response.defer(ephemeral=True, thinking=True)
+        try:
+            await interaction.channel.send(
+                content=f"📚 Documento solicitado por {interaction.user.mention}: {discord.utils.escape_markdown(name)}",
+                file=discord.File(path),
+                allowed_mentions=discord.AllowedMentions.none(),
+            )
+        except (discord.Forbidden, discord.HTTPException):
+            await interaction.followup.send("⚠️ No pude adjuntar el archivo en este canal. Revisa mis permisos y el tamaño.", ephemeral=True)
+            return
+        await interaction.followup.send("✅ PDF enviado a este canal.", ephemeral=True)
+
+
+class AuthorizedPDFView(discord.ui.View):
+    def __init__(self, owner_id, choices):
+        super().__init__(timeout=180)
+        self.owner_id = owner_id
+        self.add_item(AuthorizedPDFSelect(choices[:25]))
+
+    async def interaction_check(self, interaction):
+        if interaction.user.id != self.owner_id:
+            await interaction.response.send_message("Abre tu propio catálogo con m!catalogo.", ephemeral=True)
+            return False
+        return True
+
+
 class NovelDetailView(discord.ui.View):
     def __init__(self, owner_id, group):
         super().__init__(timeout=180)
@@ -309,6 +351,23 @@ class NovelDetailView(discord.ui.View):
             await interaction.response.send_message("Abre tu propio catálogo con m!catalogo.", ephemeral=True)
             return False
         return True
+
+    @discord.ui.button(label="Solicitar PDF", emoji="📥", style=discord.ButtonStyle.success)
+    async def request_pdf(self, interaction, button):
+        filenames = [title for _, title, _ in self.group["items"]]
+        choices = authorized_keys_for_filenames(filenames)
+        if not choices:
+            await interaction.response.send_message(
+                "📄 Esta obra aún no tiene archivos habilitados para entrega directa.",
+                ephemeral=True,
+            )
+            return
+        choices.sort(key=lambda item: document_sort_key(item[1]))
+        view = AuthorizedPDFView(interaction.user.id, choices)
+        await interaction.response.send_message(
+            "📥 Selecciona un documento autorizado. Se publicará en este canal.",
+            view=view, ephemeral=True,
+        )
 
     @discord.ui.button(label="Ver documentos", emoji="📄", style=discord.ButtonStyle.primary)
     async def documents(self, interaction, button):
