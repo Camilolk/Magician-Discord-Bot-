@@ -41,7 +41,17 @@ def filename_parts(filename):
     stem = re.sub(r"[\[\]()_.,-]+", " ", stem).strip()
     return chapter, int(volume.group(1)) if volume else None, stem
 
-def audit(data):
+def audit(data, aliases=None):
+    aliases = aliases or {}
+    title_to_aliases = {}
+    for canonical, names in aliases.items():
+        if not isinstance(names, list) or not all(isinstance(name, str) for name in names):
+            raise ValueError("Cada alias debe ser una lista de textos")
+        family = [canonical, *names]
+        for name in family:
+            title_to_aliases[normalize(name)] = family
+    known_titles = [(work.get("title") or "", work.get("message_id")) for work in data["works"]]
+
     reports = []
     all_ids = []
     for work in data["works"]:
@@ -53,15 +63,25 @@ def audit(data):
             filename = doc.get("filename", "")
             chapter, volume, stem = filename_parts(filename)
             expected, actual = tokens(title), tokens(stem)
-            overlap = len(expected & actual) / len(expected) if expected else 0
+            family = title_to_aliases.get(normalize(title), [title])
+            overlap = max((len(tokens(alias) & actual) / len(tokens(alias)) for alias in family if tokens(alias)), default=0)
             generic = not actual or (chapter is not None and not tokens(stem))
             reasons = []
             special = bool(SPECIAL.search(filename))
             edition = sorted(set(EDITION.findall(filename.upper())))
             if title_invalid:
                 reasons.append("invalid_work_title")
+            suggestions = []
             if not generic and overlap < 0.35:
                 reasons.append("filename_title_mismatch")
+                for other_title, other_id in known_titles:
+                    if other_id == work.get("message_id") or not tokens(other_title):
+                        continue
+                    score = len(tokens(other_title) & actual) / len(tokens(other_title))
+                    if score >= 0.75 and len(tokens(other_title) & actual) >= 2:
+                        suggestions.append({"title": other_title, "metadata_message_id": other_id, "score": round(score, 2)})
+                suggestions.sort(key=lambda item: (-item["score"], item["title"]))
+                suggestions = suggestions[:3]
             if chapter and chapter[0] > chapter[1]:
                 reasons.append("invalid_range")
             if chapter and not special:
@@ -80,6 +100,7 @@ def audit(data):
                 "volume": volume,
                 "special_chapters": special,
                 "edition_tags": edition,
+                "possible_other_works": suggestions,
                 "status": status,
                 "reasons": reasons,
                 "title_token_overlap": round(overlap, 2) if not generic else None,
@@ -115,9 +136,12 @@ def main():
     parser = argparse.ArgumentParser(description="Audita asociaciones de novelas y PDF")
     parser.add_argument("--input", default="story_preview.json")
     parser.add_argument("--output", default="story_audit.json")
+    parser.add_argument("--aliases", default="story_aliases.json", help="Alias confirmados; archivo opcional")
     args = parser.parse_args()
     data = json.loads(Path(args.input).read_text(encoding="utf-8"))
-    report = audit(data)
+    alias_path = Path(args.aliases)
+    alias_config = json.loads(alias_path.read_text(encoding="utf-8")) if alias_path.exists() else {"aliases": {}}
+    report = audit(data, alias_config.get("aliases", {}))
     Path(args.output).write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
     print("Auditoría guardada en:", args.output)
     for key, value in report["summary"].items():
