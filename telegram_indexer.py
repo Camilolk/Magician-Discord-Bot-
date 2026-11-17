@@ -26,7 +26,7 @@ def message_link(chat, message_id):
     return None
 
 
-async def index_pdfs(limit: int):
+async def index_pdfs(limit: int, incremental: bool = False):
     load_dotenv()
     api_id = os.getenv("TELEGRAM_API_ID")
     api_hash = os.getenv("TELEGRAM_API_HASH")
@@ -37,11 +37,20 @@ async def index_pdfs(limit: int):
     session = os.getenv("TELEGRAM_SESSION_PATH", "magician_telegram")
     count = 0
     scanned = 0
+    newest_known = 0
+    if incremental:
+        async with aiosqlite.connect(DB_PATH) as db:
+            async with db.execute(
+                "SELECT COALESCE(MAX(telegram_message_id), 0) FROM novels WHERE telegram_chat_id = ?",
+                (CHANNEL_ID,),
+            ) as cursor:
+                newest_known = (await cursor.fetchone())[0]
+        print(f"Buscando mensajes posteriores a {newest_known}...")
     async with TelegramClient(session, int(api_id), api_hash) as client:
         chat = await client.get_entity(CHANNEL_ID)
         print(f"Canal: {getattr(chat, 'title', CHANNEL_ID)}")
         async with aiosqlite.connect(DB_PATH) as db:
-            async for msg in client.iter_messages(chat, limit=limit or None):
+            async for msg in client.iter_messages(chat, limit=limit or None, min_id=newest_known):
                 scanned += 1
                 if not msg.file:
                     continue
@@ -72,7 +81,8 @@ async def index_pdfs(limit: int):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Indexa metadatos de PDF de Telegram")
     parser.add_argument("--limit", type=int, default=100, help="Mensajes a revisar; 0 = todos")
+    parser.add_argument("--incremental", action="store_true", help="Revisar solo mensajes nuevos")
     args = parser.parse_args()
     if args.limit < 0:
         parser.error("--limit debe ser >= 0")
-    asyncio.run(index_pdfs(args.limit))
+    asyncio.run(index_pdfs(args.limit, args.incremental))
