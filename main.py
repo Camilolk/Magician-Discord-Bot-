@@ -217,6 +217,35 @@ def catalog_groups(records):
     return sorted(groups.values(), key=lambda group: normalize(group["name"]))
 
 
+async def attach_public_document_links(groups):
+    """Use only URLs saved by the indexer for this exact Telegram message ID.
+
+    No t.me/c private-channel links are constructed. Source links are not
+    evidence that provisional novel-to-document associations are correct.
+    """
+    ids = {message_id for group in groups for message_id, _, _ in group["items"]
+           if isinstance(message_id, int)}
+    if not ids:
+        return groups
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute(
+            "SELECT telegram_message_id, source_url FROM novels WHERE source_url IS NOT NULL"
+        ) as cursor:
+            rows = await cursor.fetchall()
+    public_links = {}
+    for message_id, url in rows:
+        if message_id in ids and isinstance(url, str) and re.fullmatch(
+            rf"https://t\.me/[A-Za-z0-9_]{{5,32}}/{message_id}", url
+        ):
+            public_links[message_id] = url
+    for group in groups:
+        group["items"] = [
+            (message_id, title, public_links.get(message_id))
+            for message_id, title, _ in group["items"]
+        ]
+    return groups
+
+
 class CatalogSelect(discord.ui.Select):
     def __init__(self, catalog_view):
         self.catalog_view = catalog_view
@@ -448,7 +477,7 @@ async def biblioteca(ctx):
 @bot.command(name="catalogo")
 async def catalogo(ctx):
     try:
-        groups = load_story_groups()
+        groups = await attach_public_document_links(load_story_groups())
     except (OSError, ValueError, KeyError, TypeError) as exc:
         logger.warning("No se pudo cargar story_preview.json: %s", exc)
         groups = []
