@@ -244,3 +244,4 @@ story_review_decisions*.json
 telegram_evidence*.json
 story_candidate_comparison*.json
 telegram_document_comparison*.json
+story_assisted_review*.json
