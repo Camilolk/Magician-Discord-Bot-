@@ -644,7 +644,7 @@ async def recomendar(ctx, *, preferencia=""):
 
 @bot.command(name="misfavoritos", aliases=["favoritos"])
 async def misfavoritos(ctx):
-    rows = await readers.entries(ctx.author.id, favorites=True)
+    rows = (await readers.entries(ctx.author.id, favorites=True))[:10]
     if not rows:
         await ctx.send("⭐ No tienes favoritos. Abre una ficha con m!catalogo y pulsa ⭐ Favorito.")
         return
@@ -655,7 +655,7 @@ async def misfavoritos(ctx):
 
 @bot.command(name="historial")
 async def historial(ctx):
-    rows = await readers.entries(ctx.author.id)
+    rows = (await readers.entries(ctx.author.id))[:10]
     if not rows:
         await ctx.send("📖 Tu historial está vacío. Abre documentos desde m!catalogo.")
         return
