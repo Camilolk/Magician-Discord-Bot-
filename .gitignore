@@ -241,3 +241,4 @@ story_audit*.json
 story_review_queue*.json
 story_grouped_review*.json
 story_review_decisions*.json
+telegram_evidence*.json
