@@ -275,12 +275,14 @@ class CatalogSelect(discord.ui.Select):
         view.message = await interaction.original_response()
 
 
-async def send_approved_pdf(channel, key, content):
+async def send_approved_pdf(channel, key, content, on_upload=None):
     """Upload one approved PDF, then clean up any Telegram download."""
     entry = get_authorized_entry(key)
     if entry.get("source") == "telegram":
         with tempfile.TemporaryDirectory(prefix="magician_pdf_") as directory:
             path = await download_approved_telegram_pdf(entry, directory)
+            if on_upload is not None:
+                await on_upload()
             await channel.send(content=content, file=discord.File(path),
                                allowed_mentions=discord.AllowedMentions.none())
     else:
@@ -313,18 +315,22 @@ class AuthorizedPDFSelect(discord.ui.Select):
             )
             return
         await interaction.response.defer(ephemeral=True, thinking=True)
+        await interaction.followup.send("⏳ Preparando descarga desde Telegram…", ephemeral=True)
+        async def report_upload():
+            await interaction.edit_original_response(content="📤 Descarga completada. Subiendo PDF a Discord…")
         try:
             await send_approved_pdf(
                 interaction.channel, key,
                 f"📚 Documento solicitado por {interaction.user.mention}: {discord.utils.escape_markdown(name)}",
+                on_upload=report_upload,
             )
         except DeliveryError as exc:
-            await interaction.followup.send(f"📄 {exc}", ephemeral=True)
+            await interaction.edit_original_response(content=f"📄 {exc}")
             return
         except (discord.Forbidden, discord.HTTPException):
-            await interaction.followup.send("⚠️ No pude adjuntar el PDF en este canal.", ephemeral=True)
+            await interaction.edit_original_response(content="⚠️ No pude adjuntar el PDF en este canal.")
             return
-        await interaction.followup.send("✅ PDF enviado a este canal.", ephemeral=True)
+        await interaction.edit_original_response(content="✅ PDF enviado a este canal.")
 
 
 class AuthorizedPDFView(discord.ui.View):
