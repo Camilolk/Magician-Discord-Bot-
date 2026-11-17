@@ -3,6 +3,7 @@ import asyncio
 import logging
 import os
 import re
+import tempfile
 import unicodedata
 
 import aiosqlite
@@ -13,7 +14,8 @@ from rapidfuzz import fuzz
 
 from database import DB_PATH, init_db
 from story_catalog import load_story_groups, document_sort_key
-from authorized_delivery import get_authorized_pdf, authorized_keys_for_filenames, DeliveryError
+from authorized_delivery import get_authorized_pdf, get_authorized_entry, authorized_keys_for_filenames, DeliveryError
+from telegram_pdf_delivery import download_approved_telegram_pdf
 
 load_dotenv()
 logging.basicConfig(level=logging.INFO)
@@ -273,6 +275,20 @@ class CatalogSelect(discord.ui.Select):
         view.message = await interaction.original_response()
 
 
+async def send_approved_pdf(channel, key, content):
+    """Upload one approved PDF, then clean up any Telegram download."""
+    entry = get_authorized_entry(key)
+    if entry.get("source") == "telegram":
+        with tempfile.TemporaryDirectory(prefix="magician_pdf_") as directory:
+            path = await download_approved_telegram_pdf(entry, directory)
+            await channel.send(content=content, file=discord.File(path),
+                               allowed_mentions=discord.AllowedMentions.none())
+    else:
+        path = get_authorized_pdf(key)
+        await channel.send(content=content, file=discord.File(path),
+                           allowed_mentions=discord.AllowedMentions.none())
+
+
 class AuthorizedPDFSelect(discord.ui.Select):
     def __init__(self, choices):
         self.choices = choices
@@ -284,20 +300,17 @@ class AuthorizedPDFSelect(discord.ui.Select):
 
     async def callback(self, interaction):
         key, name = self.choices[int(self.values[0])]
-        try:
-            path = get_authorized_pdf(key)
-        except DeliveryError as exc:
-            await interaction.response.send_message(f"📄 {exc}", ephemeral=True)
-            return
         await interaction.response.defer(ephemeral=True, thinking=True)
         try:
-            await interaction.channel.send(
-                content=f"📚 Documento solicitado por {interaction.user.mention}: {discord.utils.escape_markdown(name)}",
-                file=discord.File(path),
-                allowed_mentions=discord.AllowedMentions.none(),
+            await send_approved_pdf(
+                interaction.channel, key,
+                f"📚 Documento solicitado por {interaction.user.mention}: {discord.utils.escape_markdown(name)}",
             )
+        except DeliveryError as exc:
+            await interaction.followup.send(f"📄 {exc}", ephemeral=True)
+            return
         except (discord.Forbidden, discord.HTTPException):
-            await interaction.followup.send("⚠️ No pude adjuntar el archivo en este canal. Revisa mis permisos y el tamaño.", ephemeral=True)
+            await interaction.followup.send("⚠️ No pude adjuntar el PDF en este canal.", ephemeral=True)
             return
         await interaction.followup.send("✅ PDF enviado a este canal.", ephemeral=True)
 
@@ -587,20 +600,11 @@ async def entregar(ctx, *, clave=""):
         await ctx.send("Uso: `m!entregar clave` (solo documentos autorizados).")
         return
     try:
-        path = get_authorized_pdf(clave.strip())
+        await send_approved_pdf(ctx, clave.strip(), "📚 Aquí tienes el documento autorizado solicitado.")
     except DeliveryError as exc:
         await ctx.send(f"📄 {exc}")
-        return
-    try:
-        await ctx.send(
-            content="📚 Aquí tienes el documento autorizado solicitado.",
-            file=discord.File(path),
-            allowed_mentions=discord.AllowedMentions.none(),
-        )
-    except discord.Forbidden:
-        await ctx.send("⚠️ No tengo permisos para adjuntar archivos en este canal.")
-    except discord.HTTPException:
-        await ctx.send("⚠️ Discord no pudo entregar el archivo. Revisa el tamaño o inténtalo después.")
+    except (discord.Forbidden, discord.HTTPException):
+        await ctx.send("⚠️ No pude adjuntar el archivo en este canal.")
 
 
 @bot.command(name="ayuda")
