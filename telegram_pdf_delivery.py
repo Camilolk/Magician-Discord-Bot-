@@ -49,27 +49,27 @@ async def download_approved_telegram_pdf(entry, directory):
     session = os.getenv("TELEGRAM_SESSION_PATH", "magician_telegram")
     async with _client_lock:
         client = await _get_client(api_id, api_hash, session)
-            try:
-                message = await client.get_messages(chat_id, ids=message_id)
-            except Exception as exc:
-                raise DeliveryError("No pude consultar ese mensaje de Telegram con la sesión actual.") from exc
-            if not message or not message.document:
-                raise DeliveryError("El mensaje no contiene un documento descargable.")
-            document = message.document
-            mime = getattr(document, "mime_type", "")
-            actual_name = next((attr.file_name for attr in document.attributes
-                                if hasattr(attr, "file_name")), None)
-            if mime != "application/pdf" or actual_name != filename:
-                raise DeliveryError("El documento de Telegram no coincide con el PDF autorizado.")
-            if not 0 < document.size <= MAX_BYTES:
-                raise DeliveryError("El PDF supera el límite de 8 MB o está vacío.")
-            destination = Path(directory) / filename
-            try:
-                result = await asyncio.wait_for(
-                    client.download_media(message, file=str(destination)), timeout=120
-                )
-            except (Exception, asyncio.TimeoutError) as exc:
-                raise DeliveryError("No se pudo descargar el PDF desde Telegram.") from exc
-            if not result or not destination.is_file() or not 0 < destination.stat().st_size <= MAX_BYTES:
-                raise DeliveryError("La descarga del PDF no se completó correctamente.")
-            return destination
+        try:
+            message = await client.get_messages(chat_id, ids=message_id)
+        except Exception as exc:
+            raise DeliveryError("No pude consultar ese mensaje de Telegram con la sesión actual.") from exc
+        if not message or not message.document:
+            raise DeliveryError("El mensaje no contiene un documento descargable.")
+        document = message.document
+        mime = getattr(document, "mime_type", "")
+        actual_name = next((attr.file_name for attr in document.attributes
+                            if hasattr(attr, "file_name")), None)
+        if mime != "application/pdf" or actual_name != filename:
+            raise DeliveryError("El documento de Telegram no coincide con el PDF autorizado.")
+        if not 0 < document.size <= MAX_BYTES:
+            raise DeliveryError("El PDF supera el límite de 8 MB o está vacío.")
+        destination = Path(directory) / filename
+        try:
+            result = await asyncio.wait_for(
+                client.download_media(message, file=str(destination)), timeout=120
+            )
+        except (Exception, asyncio.TimeoutError) as exc:
+            raise DeliveryError("No se pudo descargar el PDF desde Telegram.") from exc
+        if not result or not destination.is_file() or not 0 < destination.stat().st_size <= MAX_BYTES:
+            raise DeliveryError("La descarga del PDF no se completó correctamente.")
+        return destination
