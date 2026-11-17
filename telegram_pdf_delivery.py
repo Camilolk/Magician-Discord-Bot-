@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 
 from telethon import TelegramClient
+from dotenv import load_dotenv
 
 from authorized_delivery import DeliveryError, MAX_BYTES
 
@@ -19,13 +20,14 @@ async def download_approved_telegram_pdf(entry, directory):
         raise DeliveryError("Faltan los identificadores del documento de Telegram.")
     if not isinstance(filename, str) or Path(filename).name != filename or not filename.lower().endswith(".pdf"):
         raise DeliveryError("El nombre del PDF no es válido.")
+    load_dotenv()
     try:
         api_id = int(os.environ["TELEGRAM_API_ID"])
         api_hash = os.environ["TELEGRAM_API_HASH"]
     except (KeyError, ValueError) as exc:
         raise DeliveryError("Configura TELEGRAM_API_ID y TELEGRAM_API_HASH en .env.") from exc
 
-    session = str(Path(__file__).resolve().parent / "magician_telegram")
+    session = os.getenv("TELEGRAM_SESSION_PATH", "magician_telegram")
     async with TelegramClient(session, api_id, api_hash) as client:
         try:
             message = await client.get_messages(chat_id, ids=message_id)
