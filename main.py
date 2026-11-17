@@ -264,7 +264,8 @@ class CatalogView(discord.ui.View):
         self.previous.disabled = self.page == 0
         self.next_page.disabled = self.page == self.total_pages - 1
         self.clear_items()
-        self.add_item(CatalogSelect(self))
+        if self.groups:
+            self.add_item(CatalogSelect(self))
         self.add_item(self.previous)
         self.add_item(self.next_page)
 
