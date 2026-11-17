@@ -4,13 +4,14 @@ Only files explicitly listed in authorized_pdfs.json can be sent.
 No Telegram downloads or automatic redistribution are performed.
 """
 import json
+import os
 import sqlite3
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
 PDF_ROOT = ROOT / "authorized_pdfs"
 MANIFEST = ROOT / "authorized_pdfs.json"
-MAX_BYTES = 8 * 1024 * 1024
+MAX_BYTES = max(1, int(os.getenv("MAGICIAN_MAX_PDF_MIB", "10"))) * 1024 * 1024
 CHANNEL_GRANTS = ROOT / "authorized_channels.json"
 
 
@@ -40,7 +41,7 @@ def get_authorized_pdf(key):
         raise DeliveryError("No encontré el PDF autorizado en el servidor.")
     size = path.stat().st_size
     if size == 0 or size > MAX_BYTES:
-        raise DeliveryError("El PDF está vacío o supera el límite configurado de 8 MB.")
+        raise DeliveryError(f"El PDF está vacío o supera el límite configurado de {MAX_BYTES // (1024 * 1024)} MiB.")
     return path
 
 
