@@ -202,6 +202,118 @@ class ResultsView(discord.ui.View):
                 pass
 
 
+
+def catalog_groups(records):
+    """Group document metadata by normalized work name, retaining every file."""
+    groups = {}
+    for title, url in records:
+        base, volume = title_parts(title)
+        key = normalize(base)
+        if not key:
+            continue
+        group = groups.setdefault(key, {"name": base, "items": []})
+        group["items"].append((volume, title, url))
+    return sorted(groups.values(), key=lambda group: normalize(group["name"]))
+
+
+class CatalogSelect(discord.ui.Select):
+    def __init__(self, catalog_view):
+        self.catalog_view = catalog_view
+        start = catalog_view.page * 10
+        choices = catalog_view.groups[start:start + 10]
+        options = [
+            discord.SelectOption(
+                label=group["name"][:100],
+                value=str(start + i),
+                description=f'{len(group["items"])} documento(s)'[:100],
+                emoji="📖",
+            )
+            for i, group in enumerate(choices)
+        ]
+        super().__init__(placeholder="📚 Selecciona una novela", options=options, row=0)
+
+    async def callback(self, interaction):
+        group = self.catalog_view.groups[int(self.values[0])]
+        items = sorted(
+            group["items"],
+            key=lambda item: (item[0] is None, item[0] or 0, normalize(item[1])),
+        )
+        results = [(title, url) for _, title, url in items]
+        view = ResultsView(interaction.user.id, results, f'📖 {group["name"][:180]}')
+        await interaction.response.send_message(
+            embed=view.embed(), view=view, ephemeral=True,
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
+        view.message = await interaction.original_response()
+
+
+class CatalogView(discord.ui.View):
+    def __init__(self, owner_id, groups):
+        super().__init__(timeout=180)
+        self.owner_id = owner_id
+        self.groups = groups
+        self.page = 0
+        self.message = None
+        self.refresh()
+
+    @property
+    def total_pages(self):
+        return max(1, (len(self.groups) + 9) // 10)
+
+    def refresh(self):
+        self.previous.disabled = self.page == 0
+        self.next_page.disabled = self.page == self.total_pages - 1
+        self.clear_items()
+        self.add_item(CatalogSelect(self))
+        self.add_item(self.previous)
+        self.add_item(self.next_page)
+
+    def embed(self):
+        start = self.page * 10
+        groups = self.groups[start:start + 10]
+        lines = [
+            f'**{start + i + 1:02d}.** {discord.utils.escape_markdown(group["name"][:150])} '
+            f'· **{len(group["items"])}** PDF'
+            for i, group in enumerate(groups)
+        ]
+        embed = discord.Embed(
+            title="📚 Magician 3.0 · Catálogo de obras",
+            description="Selecciona una obra en el menú para ver sus documentos.\n\n" + "\n".join(lines),
+            color=discord.Color.from_rgb(150, 90, 225),
+        )
+        embed.set_footer(text=f'Página {self.page + 1}/{self.total_pages} · {len(self.groups)} obras · Magician Library')
+        return embed
+
+    async def interaction_check(self, interaction):
+        if interaction.user.id != self.owner_id:
+            await interaction.response.send_message(
+                "Abre tu propio catálogo con m!catalogo.", ephemeral=True
+            )
+            return False
+        return True
+
+    @discord.ui.button(label="Anterior", emoji="◀️", style=discord.ButtonStyle.secondary, row=1)
+    async def previous(self, interaction, button):
+        self.page = max(0, self.page - 1)
+        self.refresh()
+        await interaction.response.edit_message(embed=self.embed(), view=self)
+
+    @discord.ui.button(label="Siguiente", emoji="▶️", style=discord.ButtonStyle.primary, row=1)
+    async def next_page(self, interaction, button):
+        self.page = min(self.total_pages - 1, self.page + 1)
+        self.refresh()
+        await interaction.response.edit_message(embed=self.embed(), view=self)
+
+    async def on_timeout(self):
+        for child in self.children:
+            child.disabled = True
+        if self.message:
+            try:
+                await self.message.edit(view=self)
+            except discord.HTTPException:
+                pass
+
+
 class Magician(commands.Bot):
     def __init__(self):
         intents = discord.Intents.default()
@@ -252,6 +364,17 @@ async def biblioteca(ctx):
     await send_results(ctx, "", "🪄 Biblioteca Magician")
 
 
+@bot.command(name="catalogo")
+async def catalogo(ctx):
+    records = await find_titles("")
+    groups = catalog_groups(records)
+    if not groups:
+        await ctx.send("📚 El catálogo está vacío. Ejecuta primero telegram_indexer.py.")
+        return
+    view = CatalogView(ctx.author.id, groups)
+    view.message = await ctx.send(embed=view.embed(), view=view, allowed_mentions=discord.AllowedMentions.none())
+
+
 @bot.command(name="novela")
 async def novela(ctx, *, titulo=""):
     if not titulo.strip():
@@ -286,7 +409,7 @@ async def estadisticas(ctx):
 @bot.command(name="ayuda")
 async def ayuda(ctx):
     await ctx.send(
-        "🪄 **Magician 2.5**\n"
+        "🪄 **Magician 3.0**\n"
         "`m!ping` — Estado\n"
         "`m!buscar título` — Búsqueda aproximada\n"
         "`m!recientes` — Últimas novelas\n"
