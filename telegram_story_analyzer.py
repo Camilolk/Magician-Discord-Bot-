@@ -37,6 +37,35 @@ def fields_from_text(body):
             result[key] = value
     return result
 
+RELATED_WORKS_RE = re.compile(
+    r"(?im)^\\s*otras obras del autor\\s*[:：]\\s*(.*)$"
+)
+
+
+def related_works_from_text(body):
+    """Keep author references separate from the current work's title."""
+    match = RELATED_WORKS_RE.search(body)
+    if not match:
+        return []
+    lines = [match.group(1).strip()]
+    # Continuation lines may wrap naturally, but stop at blank lines,
+    # hashtags, metadata fields, or another heading.
+    tail = body[match.end():].splitlines()
+    for line in tail:
+        line = line.strip()
+        if not line or line.startswith("#") or FIELD_RE.match(line):
+            break
+        if re.match(r"(?i)^(?:otras obras|sinopsis|resumen|descarga|enlaces?)\\s*:", line):
+            break
+        lines.append(line)
+        if len(lines) >= 5:
+            break
+    joined = " ".join(lines).strip()
+    # Preserve a single free-text reference; splitting on commas can
+    # accidentally split a legitimate novel title.
+    return [joined] if joined else []
+
+
 RANGE_RE = re.compile(r"^\s*(\d{1,5})\s*[-–_]\s*(\d{1,5})\s*$")
 GENERIC_RE = re.compile(r"^(?:\d{1,5}|vol(?:umen|ume)?\.?\s*\d+|tomo\s*\d+)$", re.I)
 
@@ -62,6 +91,7 @@ def metadata(msg):
         **fields,
         "message_id": msg.id,
         "description_excerpt": body[:500],
+        "related_works": related_works_from_text(body),
         "documents": [],
         "confidence": "contextual",
     }
