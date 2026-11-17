@@ -58,7 +58,7 @@ def pdf_info(msg):
     }
 
 
-async def analyze(limit):
+async def analyze(limit, inspect=False):
     load_dotenv()
     api_id, api_hash = os.getenv("TELEGRAM_API_ID"), os.getenv("TELEGRAM_API_HASH")
     if not api_id or not api_hash:
@@ -69,6 +69,16 @@ async def analyze(limit):
         # Telegram yields newest first; reverse to reconstruct publication order.
         messages = [msg async for msg in client.iter_messages(chat, limit=limit or None)]
     messages.reverse()
+    if inspect:
+        print("Muestras de publicaciones sin archivos (máximo 8):")
+        shown = 0
+        for msg in messages:
+            if not is_pdf(msg) and (msg.message or "").strip():
+                snippet = (msg.message or "").strip().replace("\\n", " ")[:220]
+                print(f"  Mensaje {msg.id}: {snippet}")
+                shown += 1
+                if shown >= 8:
+                    break
     works, unassigned = [], []
     active = None
     # A conservative window prevents an unrelated PDF being attached much later.
@@ -105,10 +115,11 @@ def main():
     parser = argparse.ArgumentParser(description="Vista previa de agrupaciones de novelas de Telegram")
     parser.add_argument("--limit", type=int, default=500, help="Mensajes a revisar; 0 = todo")
     parser.add_argument("--output", default="story_preview.json", help="Archivo JSON local")
+    parser.add_argument("--inspect", action="store_true", help="Mostrar ejemplos de mensajes para diagnosticar formatos")
     args = parser.parse_args()
     if args.limit < 0:
         parser.error("--limit debe ser >= 0")
-    report = asyncio.run(analyze(args.limit))
+    report = asyncio.run(analyze(args.limit, args.inspect))
     Path(args.output).write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
     for key in ("scanned_messages", "detected_works", "assigned_pdfs", "unassigned_pdfs"):
         print(f"{key}: {report[key]}")
