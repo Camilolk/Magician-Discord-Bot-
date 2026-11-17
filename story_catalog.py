@@ -71,7 +71,7 @@ def load_story_groups(path=PREVIEW_PATH):
                 "author": (work.get("author") or "").strip(),
                 "genres": (work.get("genres") or "").strip(),
                 "status": (work.get("estado") or "").strip(),
-                "synopsis": extract_synopsis(work.get("description_excerpt") or ""),
+                "synopsis": extract_synopsis(work.get("description_full") or work.get("description_excerpt") or ""),
                 "metadata_message_id": work.get("message_id"),
                 "provisional": True,
             })
