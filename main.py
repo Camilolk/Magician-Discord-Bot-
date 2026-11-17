@@ -18,7 +18,13 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("magician")
 PREFIX = "m!"
 PAGE_SIZE = 5
-MAX_RESULTS = 100
+MAX_RESULTS = 500
+
+
+def clean_title(value):
+    value = re.sub(r"(?i)\.pdf$", "", value.strip())
+    value = value.replace("_", " ")
+    return re.sub(r"\s+", " ", value).strip(" -") or "Documento sin título"
 
 
 def normalize(value):
@@ -38,7 +44,7 @@ async def find_titles(query="", limit=None):
     needle = normalize(query)
     matches = []
     for title, url in records:
-        haystack = normalize(title)
+        haystack = normalize(clean_title(title))
         score = max(fuzz.WRatio(needle, haystack), fuzz.partial_ratio(needle, haystack))
         if needle in haystack or score >= 75:
             matches.append((score, title, url))
@@ -100,7 +106,7 @@ class ResultsView(discord.ui.View):
             color=discord.Color.from_rgb(150, 90, 225),
         )
         for i, (title, url) in enumerate(self.results[start:end], start + 1):
-            safe = discord.utils.escape_markdown(title)
+            safe = discord.utils.escape_markdown(clean_title(title))
             # Avoid exposing private-channel URLs or untrusted schemes.
             detail = "📄 Documento PDF · Disponible en el catálogo"
             if url and re.fullmatch(r"https://t\\.me/[A-Za-z0-9_]+/\\d+", url):
@@ -201,6 +207,14 @@ async def biblioteca(ctx):
     await send_results(ctx, "", "🪄 Biblioteca Magician")
 
 
+@bot.command(name="novela")
+async def novela(ctx, *, titulo=""):
+    if not titulo.strip():
+        await ctx.send("Uso: m!novela nombre de la obra")
+        return
+    await send_results(ctx, titulo, f"📖 Coincidencias: {titulo[:120]}")
+
+
 @bot.command(name="estadisticas", aliases=["stats"])
 async def estadisticas(ctx):
     async with aiosqlite.connect(DB_PATH) as db:
@@ -222,7 +236,7 @@ async def estadisticas(ctx):
 @bot.command(name="ayuda")
 async def ayuda(ctx):
     await ctx.send(
-        "🪄 **Magician 2.0**\n"
+        "🪄 **Magician 2.3**\n"
         "`m!ping` — Estado\n"
         "`m!buscar título` — Búsqueda aproximada\n"
         "`m!recientes` — Últimas novelas\n"
