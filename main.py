@@ -33,35 +33,49 @@ def normalize(value):
     return re.sub(r"[^\w]+", " ", value).strip()
 
 
+
+def title_parts(title):
+    value = clean_title(title)
+    match = re.match(r"^0*(\d{1,3})\s*(?:[-.·]\s*|\s+)(.+)$", value)
+    if match:
+        return match.group(2).strip(), int(match.group(1))
+    match = re.search(r"\s+(?:vol(?:umen|ume)?\.?|tomo)\s*0*(\d{1,3})$", value, re.I)
+    if match:
+        return value[:match.start()].strip(" -"), int(match.group(1))
+    return value, None
+
+
+def rank_title(query, title):
+    needle = normalize(query)
+    base, _ = title_parts(title)
+    name = normalize(base)
+    if needle == name:
+        return 1000
+    if name.startswith(needle):
+        return 900
+    if needle in name:
+        return 800
+    words = needle.split()
+    if words and all(word in name.split() for word in words):
+        return 700
+    score = fuzz.ratio(needle, name)
+    return score if score >= 85 else -1
+
+
 async def find_titles(query="", limit=None):
     async with aiosqlite.connect(DB_PATH) as db:
-        async with db.execute(
-            "SELECT title, source_url FROM novels ORDER BY id DESC"
-        ) as cursor:
+        async with db.execute("SELECT title, source_url FROM novels ORDER BY id DESC") as cursor:
             records = await cursor.fetchall()
     if not query.strip():
-        return records
-    needle = normalize(query)
+        return records[:limit] if limit is not None else records
     matches = []
-    for title, url in records:
-        haystack = normalize(clean_title(title))
-        score = max(fuzz.WRatio(needle, haystack), fuzz.partial_ratio(needle, haystack))
-        if needle in haystack or score >= 75:
-            matches.append((score, title, url))
-    matches.sort(key=lambda item: (-item[0], item[1].casefold()))
-    return [(title, url) for _, title, url in matches[:MAX_RESULTS]]
-
-
-
-def volume_number(title):
-    match = re.search(r"(?:vol(?:umen|ume)?\.?\s*|tomo\s*|[-–]\s*)?(\d{1,3})$", clean_title(title), re.I)
-    return int(match.group(1)) if match else None
-
-
-def novel_group_key(title):
-    value = re.sub(r"^\d{1,3}\s*[-.·]\s*", "", clean_title(title))
-    value = re.sub(r"(?:\s*[-–:]?\s*(?:vol(?:umen|ume)?\.?|tomo)\s*)?\d{1,3}$", "", value, flags=re.I)
-    return normalize(value)
+    for index, (title, url) in enumerate(records):
+        score = rank_title(query, title)
+        if score >= 0:
+            matches.append((score, index, title, url))
+    matches.sort(key=lambda item: (-item[0], item[1]))
+    cap = MAX_RESULTS if limit is None else limit
+    return [(title, url) for _, _, title, url in matches[:cap]]
 
 
 async def find_novel_volumes(query):
@@ -69,17 +83,15 @@ async def find_novel_volumes(query):
     needle = normalize(query)
     families = {}
     for title, url in records:
-        key = novel_group_key(title)
-        if needle in key or key == needle:
-            families.setdefault(key, []).append((title, url))
+        base, volume = title_parts(title)
+        key = normalize(base)
+        if key and volume is not None and (needle == key or key.startswith(needle) or needle in key):
+            families.setdefault(key, []).append((volume, title, url))
     if not families:
         return []
-    family = max(families, key=lambda key: (fuzz.ratio(needle, key), len(families[key])))
-    unique = {}
-    for title, url in families[family]:
-        vol = volume_number(title)
-        unique.setdefault(("volume", vol) if vol is not None else ("title", normalize(clean_title(title))), (title, url))
-    return sorted(unique.values(), key=lambda row: (volume_number(row[0]) is None, volume_number(row[0]) or 0, normalize(row[0])))
+    family = max(families, key=lambda key: (key == needle, key.startswith(needle), fuzz.ratio(needle, key)))
+    matches = sorted(families[family], key=lambda row: (row[0], normalize(row[1])))
+    return [(title, url) for _, title, url in matches]
 
 
 class JumpModal(discord.ui.Modal, title="Ir a una página"):
@@ -271,7 +283,7 @@ async def estadisticas(ctx):
 @bot.command(name="ayuda")
 async def ayuda(ctx):
     await ctx.send(
-        "🪄 **Magician 2.3**\n"
+        "🪄 **Magician 2.5**\n"
         "`m!ping` — Estado\n"
         "`m!buscar título` — Búsqueda aproximada\n"
         "`m!recientes` — Últimas novelas\n"
