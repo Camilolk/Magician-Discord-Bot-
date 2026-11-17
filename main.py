@@ -290,16 +290,28 @@ async def send_approved_pdf(channel, key, content):
 
 
 class AuthorizedPDFSelect(discord.ui.Select):
-    def __init__(self, choices):
-        self.choices = choices
+    def __init__(self, parent):
+        self.parent_view = parent
+        start = parent.page * 25
+        subset = parent.documents[start:start + 25]
         options = [
-            discord.SelectOption(label=name[:100], value=str(i), emoji="📄")
-            for i, (_, name) in enumerate(choices)
+            discord.SelectOption(
+                label=name[:100], value=str(start + i),
+                description="Disponible para entrega" if key else "Solo en catálogo · entrega no habilitada",
+                emoji="📥" if key else "📄",
+            )
+            for i, (_, name, key) in enumerate(subset)
         ]
-        super().__init__(placeholder="📥 Elige un PDF autorizado", options=options)
+        super().__init__(placeholder="📚 Selecciona un volumen", options=options, row=0)
 
     async def callback(self, interaction):
-        key, name = self.choices[int(self.values[0])]
+        message_id, name, key = self.parent_view.documents[int(self.values[0])]
+        if not key:
+            await interaction.response.send_message(
+                "📄 Este PDF figura en el catálogo, pero su entrega directa aún no está habilitada.",
+                ephemeral=True,
+            )
+            return
         await interaction.response.defer(ephemeral=True, thinking=True)
         try:
             await send_approved_pdf(
@@ -316,10 +328,32 @@ class AuthorizedPDFSelect(discord.ui.Select):
 
 
 class AuthorizedPDFView(discord.ui.View):
-    def __init__(self, owner_id, choices):
+    def __init__(self, owner_id, documents):
         super().__init__(timeout=180)
         self.owner_id = owner_id
-        self.add_item(AuthorizedPDFSelect(choices[:25]))
+        self.documents = documents
+        self.page = 0
+        self.refresh()
+
+    def refresh(self):
+        self.clear_items()
+        self.add_item(AuthorizedPDFSelect(self))
+        self.previous.disabled = self.page == 0
+        self.next_page.disabled = (self.page + 1) * 25 >= len(self.documents)
+        self.add_item(self.previous)
+        self.add_item(self.next_page)
+
+    @discord.ui.button(label="Anterior", emoji="◀️", style=discord.ButtonStyle.secondary, row=1)
+    async def previous(self, interaction, button):
+        self.page = max(0, self.page - 1)
+        self.refresh()
+        await interaction.response.edit_message(view=self)
+
+    @discord.ui.button(label="Siguiente", emoji="▶️", style=discord.ButtonStyle.secondary, row=1)
+    async def next_page(self, interaction, button):
+        self.page = min((len(self.documents) - 1) // 25, self.page + 1)
+        self.refresh()
+        await interaction.response.edit_message(view=self)
 
     async def interaction_check(self, interaction):
         if interaction.user.id != self.owner_id:
@@ -368,17 +402,18 @@ class NovelDetailView(discord.ui.View):
     @discord.ui.button(label="Solicitar PDF", emoji="📥", style=discord.ButtonStyle.success)
     async def request_pdf(self, interaction, button):
         documents = [(message_id, title) for message_id, title, _ in self.group["items"]]
-        choices = authorized_keys_for_documents(documents)
+        approved = authorized_keys_for_documents(documents)
+        approved_by_name = {name: key for key, name in approved}
+        items = sorted(documents, key=lambda item: document_sort_key(item[1]))
+        choices = [(message_id, title, approved_by_name.get(title)) for message_id, title in items]
         if not choices:
-            await interaction.response.send_message(
-                "📄 Esta obra aún no tiene archivos habilitados para entrega directa.",
-                ephemeral=True,
-            )
+            await interaction.response.send_message("📄 No hay PDF asociados a esta obra.", ephemeral=True)
             return
-        choices.sort(key=lambda item: document_sort_key(item[1]))
+        available = sum(key is not None for _, _, key in choices)
         view = AuthorizedPDFView(interaction.user.id, choices)
         await interaction.response.send_message(
-            "📥 Selecciona un documento autorizado. Se publicará en este canal.",
+            f"📚 {len(choices)} PDF en el catálogo · {available} habilitado(s) para entrega. "
+            "Los demás se muestran para consulta, pero todavía no pueden enviarse.",
             view=view, ephemeral=True,
         )
 
