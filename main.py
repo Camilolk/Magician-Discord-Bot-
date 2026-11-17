@@ -13,6 +13,7 @@ from rapidfuzz import fuzz
 
 from database import DB_PATH, init_db
 from story_catalog import load_story_groups, document_sort_key
+from authorized_delivery import get_authorized_pdf, DeliveryError
 
 load_dotenv()
 logging.basicConfig(level=logging.INFO)
@@ -519,10 +520,37 @@ async def estadisticas(ctx):
     await ctx.send(embed=embed)
 
 
+@bot.command(name="entregar")
+@commands.cooldown(1, 20, commands.BucketType.user)
+async def entregar(ctx, *, clave=""):
+    """Deliver a locally approved PDF, not arbitrary Telegram files."""
+    if not clave.strip():
+        await ctx.send("Uso: `m!entregar clave` (solo documentos autorizados).")
+        return
+    try:
+        path = get_authorized_pdf(clave.strip())
+    except DeliveryError as exc:
+        await ctx.send(f"📄 {exc}")
+        return
+    try:
+        await ctx.author.send(
+            content="📚 Aquí tienes el documento autorizado solicitado.",
+            file=discord.File(path),
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
+    except discord.Forbidden:
+        await ctx.send("📩 No pude enviarte un mensaje privado. Habilita los MD del servidor.")
+        return
+    except discord.HTTPException:
+        await ctx.send("⚠️ Discord no pudo entregar el archivo. Revisa el tamaño o inténtalo después.")
+        return
+    await ctx.send("📩 Te envié el PDF por mensaje privado.")
+
+
 @bot.command(name="ayuda")
 async def ayuda(ctx):
     await ctx.send(
-        "🪄 **Magician 3.0**\n"
+        "🪄 **Magician 3.5**\n"
         "`m!ping` — Estado\n"
         "`m!buscar título` — Búsqueda aproximada\n"
         "`m!recientes` — Últimas novelas\n"
@@ -530,6 +558,7 @@ async def ayuda(ctx):
         "`m!catalogo` — Obras agrupadas con menú\n"
         "`m!novela título` — Volúmenes de una obra\n"
         "`m!estadisticas` — Resumen del catálogo\n"
+        "`m!entregar clave` — Enviar PDF autorizado por MD\n"
         "`m!ayuda` — Comandos"
     )
 
