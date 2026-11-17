@@ -13,6 +13,37 @@ def normalized(value):
     return re.sub(r"[^\w]+", " ", value).strip()
 
 
+
+def extract_synopsis(text):
+    """Only use text explicitly labeled Sinopsis/Resumen in source metadata."""
+    if not text:
+        return ""
+    lines = text.splitlines()
+    start = None
+    result = []
+    for i, line in enumerate(lines):
+        match = re.match(r"^\\s*(?:📖|📜|📝|📚)?\\s*(?:sinopsis|resumen|descripción|descripcion)\\s*[:：-]?\\s*(.*)$", line, re.I)
+        if match:
+            start = i
+            if match.group(1).strip():
+                result.append(match.group(1).strip())
+            break
+    if start is None:
+        return ""
+    for line in lines[start + 1:]:
+        stripped = line.strip()
+        if not stripped:
+            if result:
+                break
+            continue
+        if re.match(r"^[^\\w\\r\\n]{0,16}\\s*(?:t[ií]tulo|autor|origen|estado|vol[uú]men|g[eé]nero|fansubs|otras obras|descarga|enlaces?)\\s*[:：]", stripped, re.I):
+            break
+        if stripped.startswith("#") and result:
+            break
+        result.append(stripped)
+    return " ".join(result).strip()[:1800]
+
+
 def load_story_groups(path=PREVIEW_PATH):
     """Each Telegram metadata post stays separate; no unverified merging."""
     path = Path(path)
@@ -40,6 +71,7 @@ def load_story_groups(path=PREVIEW_PATH):
                 "author": (work.get("author") or "").strip(),
                 "genres": (work.get("genres") or "").strip(),
                 "status": (work.get("estado") or "").strip(),
+                "synopsis": extract_synopsis(work.get("description_excerpt") or ""),
                 "metadata_message_id": work.get("message_id"),
                 "provisional": True,
             })
