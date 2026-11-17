@@ -15,7 +15,7 @@ from rapidfuzz import fuzz
 
 from database import DB_PATH, init_db
 from story_catalog import load_story_groups, document_sort_key
-from authorized_delivery import get_authorized_pdf, get_authorized_entry, authorized_keys_for_documents, DeliveryError
+from authorized_delivery import get_authorized_pdf, get_authorized_entry, authorized_keys_for_documents, DeliveryError, MAX_BYTES
 from telegram_pdf_delivery import download_approved_telegram_pdf
 
 load_dotenv()
@@ -278,15 +278,29 @@ class CatalogSelect(discord.ui.Select):
 
 
 async def send_approved_pdf(channel, key, content, on_upload=None):
-    """Limit simultaneous transfers, log timings, and always remove temporary PDFs."""
+    """Upload authorized PDFs with bounded concurrency and measured timings."""
     started = time.monotonic()
     async with PDF_DELIVERY_SLOTS:
         entry = get_authorized_entry(key)
+        guild = getattr(channel, "guild", None)
+        upload_limit = getattr(guild, "filesize_limit", None)
+        if isinstance(upload_limit, int) and upload_limit > 0:
+            if entry.get("source") != "telegram":
+                local_path = get_authorized_pdf(key)
+                if local_path.stat().st_size > upload_limit:
+                    raise DeliveryError(
+                        f"Este servidor de Discord admite adjuntos de hasta {upload_limit / (1024 * 1024):.1f} MiB."
+                    )
         if entry.get("source") == "telegram":
             with tempfile.TemporaryDirectory(prefix="magician_pdf_") as directory:
                 path = await download_approved_telegram_pdf(entry, directory)
                 downloaded = time.monotonic()
                 logger.info("PDF %s: descarga Telegram %.1f s", key, downloaded - started)
+                if isinstance(upload_limit, int) and upload_limit > 0 and path.stat().st_size > upload_limit:
+                    raise DeliveryError(
+                        f"PDF descargado ({path.stat().st_size / (1024 * 1024):.1f} MiB), "
+                        f"pero este servidor de Discord admite hasta {upload_limit / (1024 * 1024):.1f} MiB."
+                    )
                 if on_upload is not None:
                     await on_upload()
                 await channel.send(content=content, file=discord.File(path),
